@@ -280,7 +280,7 @@ class DFState:
         if type(data) is DFTransition:
             self.transition(DFTransition.from_key(on_values, conditions, data), True)
         else:
-            self.transition(DFTransition(on_values, conditions).to(data))
+            self.transition(DFTransition(on_values, conditions).to(data), True)
 
     def __delitem__(self, key):
         if type(key) in (tuple, list):
@@ -1960,6 +1960,56 @@ class CaseNode(Node):
         
         return decider_dfa
 
+class OptionalNode(ActionSinkNode):
+    def __init__(self, sub_contents: Node):
+        self.sub_contents = sub_contents
+        self.start_actions = []
+        self.finish_actions = []
+        self.next = None
+
+    def _set_next(self, next_node):
+        self.next = next_node
+
+    def get_next(self):
+        return self.next
+
+    def _adopt_actions(self, actions):
+        if any(action.get_mode() == ActionMode.EACH_CHARACTER for action in actions):
+            raise IllegalASTStateError("Each character action in optional makes no sense", self)
+
+        for action in actions:
+            if action.get_mode() == ActionMode.AT_START:
+                self.start_actions.append(action)
+            else:
+                self.finish_actions.append(action)
+
+    def convert(self, current_error_handlers):
+        sub_dfa = self.sub_contents.convert(current_error_handlers)
+        if sub_dfa.starting_state[DFTransition.Else].target != current_error_handlers[ErrorReasons.NO_MATCH]:
+            raise IllegalDFAStateError("Unable to add an else transition to first state of optional; try using a case with empty else for this situation", sub_dfa)
+
+        new_else_state = DFState()
+        sub_dfa.add(new_else_state)
+        DebugData.imbue(new_else_state, DebugTag.PARENT, self)
+        sub_dfa.mark_accepting(new_else_state)
+
+        sub_dfa.starting_state[DFTransition.Else] = new_else_state
+
+        # Add starting transitions
+        for trans in sub_dfa.starting_state.transitions:
+            trans.attach(*self.start_actions)
+
+        # Add finish actions
+        for trans in itertools.chain(*(sub_dfa.transitions_pointing_to(x) for x in sub_dfa.accepting_states)):
+            trans.attach(*self.finish_actions)
+
+        # If we need to, add a boring after thing
+        if self.next is not None:
+            sub_dfa.append_after(self.next.convert(current_error_handlers))
+
+        return sub_dfa
+
+
 class Macro:
     def __init__(self, name_token: lark.Token, parse_tree: lark.Tree):
         self.name = name_token.value
@@ -2165,6 +2215,8 @@ class ParseCtx:
         elif stmt.data == "case_stmt":
             # Find all of the matches
             return CaseNode({k: v for k, v in (self._parse_case_clause(x) for x in stmt.children)})
+        elif stmt.data == "optional_stmt":
+            return OptionalNode(self._parse_stmt_seq(stmt.children))
         else:
             raise IllegalParseTree("Unknown statement", stmt)
 
