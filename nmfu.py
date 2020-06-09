@@ -119,7 +119,7 @@ CATCH_OPTION: /nomatch|outofspace/
 %import common.CNAME -> IDENTIFIER
 %import common.NUMBER
 
-STRING: "\"" /([^"]|(?<!\\)\\\")*/ "\""
+STRING: /"(?:[^"\\]|\\.)*"/
 
 // regex internals
 REGEX_UNIMPORTANT: /[^.?*()\[\]\\+{}|\/]|\\\.|\\\*|\\\(|\\\)|\\\[|\\\]|\\\+|\\\\|\\\{|\\\}|\\\||\\\//
@@ -1998,6 +1998,7 @@ class ParseCtx:
                         't': '\t',
                         'b': '\b',
                         '0': '\x00',
+                        '"': '"'
                     }[contents[i]]
                     i += 1
         return result
