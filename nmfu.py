@@ -193,6 +193,14 @@ class DFTransition:
         self.target = None
         self.actions = []
 
+    def copy(self):
+        my_copy = DFTransition()
+        my_copy.on_values = self.on_values.copy()
+        my_copy.conditions = self.conditions.copy()
+        my_copy.actions = self.actions.copy()
+        my_copy.target = self.target
+        return my_copy
+
     def __repr__(self):
         return f"<DFTransition on={self.on_values} to={self.target}>"
 
@@ -241,6 +249,12 @@ class DFState:
                 raise IllegalDFAStateError("Duplicate transition", self)
         elif contained is not None:
             return # don't add duplicate entries in the table
+
+        # Check if we can "inline" this transition
+        for transition_in in self.transitions:
+            if transition_in.conditions == transition.conditions and transition_in.actions == transition.actions and transition_in.target == transition.target:
+                transition_in.on_values = list(set(transition_in.on_values) | set(transition.on_values))
+                return self
         self.transitions.append(transition)
         return self
 
@@ -277,7 +291,7 @@ class DFState:
                 contained = i
                 break
         if contained is not None:
-            if type(on_values) is set:
+            if type(on_values) in (set, frozenset):
                 for on_value in on_values:
                     contained.on_values.remove(on_value)
             else:
@@ -286,20 +300,31 @@ class DFState:
                 self.transitions.remove(contained)
 
     def __getitem__(self, data):
+        """
+        Get the transition that would be followed for data, including Else if applicable
+        """
         if type(data) in (tuple, list):
             for i in self.all_transitions():
+                if not i.on_values:
+                    continue
                 if (data[0] in i.on_values) if type(data[0]) is not set else data[0] <= set(i.on_values) and data[1] == i.conditions:
                     return i
-            return None
-        elif type(data) is set:
+            return self[DFTransition.Else]
+        elif type(data) in (set, frozenset):
             for i in self.all_transitions():
+                if not i.on_values:
+                    continue
                 if data <= set(i.on_values):
                     return i
+                elif data > set(i.on_values):
+                    return None
+            return self[DFTransition.Else]
         else:
             for i in self.all_transitions():
                 if data in i.on_values:
                     return i
-            return None
+            if DFTransition.Else != data:
+                return self[DFTransition.Else]
 
 class DFA:
     all_state_machines = {}
@@ -332,7 +357,7 @@ class DFA:
             condition_states = [defaultdict(lambda: False) for x in actions]
 
         position = self.starting_state
-        for action, conditions in zip(actions, condition_states):
+        for action, _ in zip(actions, condition_states):
             # TODO: conditions
             try:
                 position = position[action].target
@@ -390,7 +415,7 @@ class DFA:
 
         return aux(self.starting_state)
 
-    def append_after(self, chained_dfa: "DFA", sub_states=None, mark_accept=True):
+    def append_after(self, chained_dfa: "DFA", sub_states=None, mark_accept=True, chain_actions=None):
         """
         Add the chained_dfa in such a way that its start state "becomes" all of the `sub_states` (or if unspecified, the accept states of _this_ dfa)
         """
@@ -402,7 +427,10 @@ class DFA:
         for sub_state in sub_states:
             for transition in chained_dfa.starting_state.transitions: # specifically exclude the else transition
                 try:
-                    sub_state.transition(transition, DFTransition.Else in transition.on_values)
+                    if not chain_actions:
+                        sub_state.transition(transition.copy(), DFTransition.Else in transition.on_values)
+                    else:
+                        sub_state.transition(transition.copy().attach(*chain_actions), DFTransition.Else in transition.on_values)
                 except IllegalDFAStateError as e:
                     # Rewrite the error as something more useful
                     raise IllegalDFAStateConflictsError("Ambigious transitions detected while joining matches", sub_state, chained_dfa.starting_state) from e
@@ -1642,201 +1670,155 @@ class CaseNode():
     def __init__(self, sub_matches: Dict[Optional[Match], Node]):
         self.sub_matches = sub_matches
 
-    def _longest_common_input_sequence(self, d1: DFA, d2: DFA, treat_as_else: DFState, d1_start: DFState = None, d2_start: DFState = None):
-        """
-        Find the longest common input sequence between d1 and d2
-        """
-
-        if d1_start is None:
-            d1_start = d1.starting_state
-        if d2_start is None:
-            d2_start = d2.starting_state
-        
-        heading = []
-
-        # TODO: handle conditionals (right now we bail if we see them)
-        
-        while d1_start not in d1.accepting_states and d2_start not in d2.accepting_states:
-            moves_1 = set()
-            moves_2 = set()
-            for moves, d_start in ((moves_1, d1_start), (moves_2, d2_start)):
-                for t in d_start.all_transitions():
-                    if t.target == treat_as_else:
-                        continue
-                    for i in t.on_values:
-                        if i == DFTransition.Else:
-                            raise NotImplementedError("Unfortunately, we do not support Else transitions in merged entries yet. This usually occurs with wildcards or inverted character classes in regexes in case statements.")
-                        moves.add(i)
-
-            potentials = moves_1 & moves_2
-            if not potentials:
-                return heading
-            if all(d1_start[potential].target == d1_start and d2_start[potential].target == d2_start for potential in potentials):
-                raise IllegalDFAStateConflictsError("Overlap in LCSS", d1_start, d2_start)
-            elif any(d1_start[potential].target == d1_start and d2_start[potential].target == d2_start for potential in potentials):
-                for potential in potentials.copy():
-                    if d1_start[potential].target == d1_start and d2_start[potential].target == d2_start:
-                        potentials.remove(potential)
-            if len(potentials) == 1:
-                take = next(iter(potentials))
-                heading.append(take)
-                d1_start = d1_start[take].target
-                d2_start = d2_start[take].target
-            elif d1_start[potentials] is not None and d2_start[potentials] is not None:
-                heading.append(potentials)
-                d1_start = d1_start[potentials].target
-                d2_start = d2_start[potentials].target
-            else:
-                options = [[*heading, take, *self._longest_common_input_sequence(d1, d2, treat_as_else, d1_start[take].target, d2_start[take].target)] for take in potentials]
-                return max(options, key=len)
-
-        return heading
-
     def _merge(self, ds: List[DFA], treat_as_else: DFState):
-        """
+        r"""
         Merge the DFAs in the list ds, ensuring that all finishing states are kept as-is.
 
-        If there are more than two DFAs present, we break it up into two and recurse to join them.
-        
-        The algorithm for doing this is:
-            1. Create starting state
-            2. If D1 or D2 is no longer valid, goto 9
-            3. Find LCSS of D1 and D2
-            4. If empty, goto 9
-            5. Create the states corresponding to the LCSS
-            6. Add all the transitions at the end of the LCSS for D1 and D2 into the end of the chain in the new DFA
-            7. Couting from the end of the LCSS, remove the first transition which is the sole method to get to its target
-                7b. If the transition which reaches it also covers more than the LCSS entry, duplicate the state for the excess
-            8. Goto 2
-            9. Add remaining states
+        This uses largely the same algorithm as the NFA-to-DFA conversion, treating the input as an NFA of the form
+             s
+            /| \ 
+          e  e   e
+         /   |    \ 
+        D1  D2 .. Dn
+
+        As such, we can generally use a similar, if simplified algorithm.
+
+        The technique is similar, keeping track of new states as sets of sub-states. Instead of directly using indices to name states, we use tuples of DFA-index and index in that DFA.
+
+        In order to deal with the complexities of the DFA representation in NMFU, we do a simplification pass on the input alphabet. We consider every matched symbol (no conditions allowed) individually to form
+        an alphabet. We then add an additional entry for "true else". An Else transition is therefore equal to "true else" + every symbol not included in the transitions
+        from the given state.
+
+        We also ignore all transitions that go to the entry marked as treat_as_else, as we re-create all the else transitions later.
+
+        In order to avoid having to run the DFA minimizer, we utilize a similar approach to the regex class to turn sets of alphabet entries into non-overlapping forms. These are then used as
+        localized alphabet symbols.
+
+        We start in state (D1,D1_start),(D2,D2_start),...,(Dn,Dn_start)
         """
-        if len(ds) > 2:
-            sub_result = self._merge([ds[0], ds[1]], treat_as_else)
-            return self._merge([sub_result, *ds[2:]], treat_as_else)
 
         new_dfa = DFA()
-        si = DFState()
-        new_dfa.add(si)
+        alphabet = set()
 
-        original_transitions = {}
-        dfa_a, dfa_b = ds
-
-        while all(x.is_valid() for x in ds):
-            best_lcss = self._longest_common_input_sequence(dfa_a, dfa_b, treat_as_else)
-            if not best_lcss:
-                break
-
-            dprint[DebugFlag.VERBOSE_CASE_MERGE]("best lcss is", best_lcss, "for DFAs", dfa_a, dfa_b)
-            
-            # add transitions
-            end_of_chain_a, end_of_chain_b = dfa_a.starting_state, dfa_b.starting_state
-            chain_a, chain_b = [], []
-
-            for i in best_lcss:
-                chain_a.append((end_of_chain_a, i))
-                chain_b.append((end_of_chain_b, i))
-                end_of_chain_a = end_of_chain_a[i].target
-                end_of_chain_b = end_of_chain_b[i].target
-            if end_of_chain_a in dfa_a.accepting_states or end_of_chain_b in dfa_b.accepting_states:
-                raise IllegalDFAStateConflictsError("Ambigious case label", dfa_a, dfa_b)
-
-            si_add = si
-
-            for i in best_lcss:
-                if si_add[i] is None:
-                    successor = DFState()
-                    new_dfa.add(successor)
-                    si_add[i] = successor
-                    si_add = successor
-                else:
-                    si_add = si_add[i].target
-
-            # add all the transitions
-            for transition in itertools.chain(end_of_chain_a.all_transitions(), end_of_chain_b.all_transitions()):
-                si_add.transition(transition)
-
-            for c_array, dfr in zip((chain_a, chain_b), (dfa_a, dfa_b)):
-                index = len(c_array) - 1
-                while len(dfr.transitions_pointing_to(c_array[index][0])) != 1:
-                    index -= 1
-                    if index == 0:
-                        raise IllegalDFAStateConflictsError("Ambigious case label", dfa_a, dfa_b)
-
-                pos, x = c_array[index]
-                if index >= 1:
-                    inc_pos, inc_x = c_array[index - 1]
-                    potential_methods = set(inc_pos[inc_x].on_values)
-                    if potential_methods > set(inc_x):
-                        clone_pos = DFState()
-                        for transition in pos.all_transitions():
-                            clone_pos.transition(DFTransition.from_key(transition.on_values.copy(), transition.conditions.copy(), transition))
-                        dfr.add(clone_pos)
-                        inc_pos.transition(DFTransition(potential_methods - set(inc_x), inc_pos[inc_x].conditions).to(clone_pos), allow_replace=True)
-                if id(pos[x]) not in original_transitions:
-                    original_transitions[id(pos[x])] = pos[x].on_values[:]
-                del pos[x]
-
-        # Restore original transitions but only inside of the original dfas
         for dfa in ds:
             for state in dfa.states:
-                for transition in state.transitions.copy():
-                    if id(transition) in original_transitions:
-                        state.transitions.remove(transition)
-                        state.transition(DFTransition.from_key(original_transitions[id(transition)], transition.conditions, transition))
+                for trans in state.transitions:
+                    if trans.conditions:
+                        raise IllegalDFAStateError("Conditions are not allowed in case matches", state)
+                    for v in trans.on_values:
+                        alphabet.add(v)
 
-        def adopt_into(transition, node):
-            try:
-                node.transition(transition)
-                dprint[DebugFlag.VERBOSE_CASE_MERGE]("adopted at", node)
-            except IllegalDFAStateError:
-                dprint[DebugFlag.VERBOSE_CASE_MERGE]("illegal")
-                dprint[DebugFlag.VERBOSE_CASE_MERGE](transition.on_values)
-                dprint[DebugFlag.VERBOSE_CASE_MERGE](*(x.on_values for x in node.transitions))
-                # Well, we know that there are no conflicts, so we instead have to continue down the tree instead
-                routes = set() 
-                overlap = set(transition.on_values)
-                for sub_node_t in node.all_transitions_for(transition.on_values, transition.conditions):
-                    overlap -= set(sub_node_t.on_values)
-                    routes.add(sub_node_t.target)
-                if overlap:
-                    new_route = DFState()
-                    new_dfa.add(new_route)
-                    node.transition(DFTransition(overlap, transition.conditions).attach(*transition.actions).to(new_route))
-                    routes.add(new_route)
-                for route in routes:
-                    # Divide into two sections: the overlap, and the non-overlap
-                    for sub_transition in transition.target.all_transitions():
-                        adopt_into(sub_transition, route)
+        alphabet.add(DFTransition.Else) 
 
-        # Add remaining transitions
-        for dfa in ds:
-            if not dfa.is_valid():
+        converted_states = {}
+        corresponding_finish_states = {dfa: [] for dfa in ds}
+        to_process = queue.Queue()
+
+        def create_real_state_of(state):
+            new_state = DFState()
+            DebugData.imbue(new_state, DebugTag.PARENT, next(iter(state))[1])
+
+            corresponds_to_finishes_in = set() 
+            is_part_of = set()
+            for sub_dfa, sub_state in state:
+                if sub_state in sub_dfa.accepting_states:
+                    corresponds_to_finishes_in.add(sub_dfa)
+                is_part_of.add(sub_dfa)
+
+            if len(corresponds_to_finishes_in) > 1:
+                raise IllegalDFAStateConflictsError("Ambigious case label: multiple possible finishes", *corresponds_to_finishes_in)
+            elif len(corresponds_to_finishes_in) == 1:
+                if len(is_part_of) != 1:
+                    raise IllegalDFAStateConflictsError("Ambigious case label: should finish or check next", *is_part_of)
+                corresponding_finish_states[next(iter(corresponding_finish_states))].append(new_state)
+                new_dfa.mark_accepting(new_state)
+
+            # Add the state
+            converted_states[state] = new_state
+            new_dfa.add(new_state)
+            return new_state
+
+        start_state = frozenset((dfa, dfa.starting_state) for dfa in ds)
+        create_real_state_of(start_state)
+        to_process.put(start_state)
+
+        while not to_process.empty():
+            processing = to_process.get()
+
+            local_alphabet = set()
+            # grab the local alphabet as a set of sets (on_values) IGNORING things that go to else_path
+            for _, sub_state in processing:
+                for trans in sub_state.transitions:
+                    if trans.target == treat_as_else:
+                        continue
+                    local_alphabet.add(frozenset(trans.on_values))
+
+            # simplify such that each element in local_alphabet is both disjoint and are all subsets of
+            # at least one entry in the original local_alphabet (i.e. such that any original element can
+            # be created by combining new ones)
+
+            while True:
+                try:
+                    a, b = next((x, y) for x, y in itertools.combinations(local_alphabet, 2) if (x & y))
+                    overlap = a & b
+                    local_alphabet.remove(a)
+                    local_alphabet.remove(b)
+                    a = a - overlap
+                    b = b - overlap
+                    if a: local_alphabet.add(a)
+                    if b: local_alphabet.add(b)
+                    local_alphabet.add(overlap)
+                except StopIteration:
+                    break
+
+            # process all moves with those sets as alphabets
+
+            print(local_alphabet)
+
+            for symbol in local_alphabet:
+                # construct the set of next states
+                next_state = set()
+                for (sub_dfa, sub_state) in processing:
+                    print(sub_state.transitions)
+                    potential_transition = sub_state[symbol]
+                    print(potential_transition)
+                    if potential_transition is None:
+                        raise RuntimeError("illegal splitting state")
+                    if potential_transition.target == treat_as_else:
+                        continue
+                    else:
+                        next_state.add((sub_dfa, potential_transition.target))
+
+                print(next_state)
+                if not next_state:
+                    continue
+
+                next_state = frozenset(next_state)
+
+                if next_state not in converted_states:
+                    to_process.put(next_state)
+                    next_state = create_real_state_of(next_state)
+                else:
+                    next_state = converted_states[next_state]
+
+                converted_states[processing][symbol] = next_state
+
+            # check if we need else (is this a finishing state)
+            if converted_states[processing] in new_dfa.accepting_states:
                 continue
-            for transition in dfa.starting_state.all_transitions():
-                dprint[DebugFlag.VERBOSE_CASE_MERGE]("adding spare start transition", transition.on_values, transition.target)
-                adopt_into(transition, si)
 
-        visited = set()
+            # construct the actual else transition based on the inverse of alphabet
+            flat_local_alphabet = set(itertools.chain(*local_alphabet))
+            actual_else = alphabet - flat_local_alphabet
 
-        # Add all states
-        def aux(state):
-            if not state:
-                return
-            if state not in new_dfa.states:
-                for x in ds:
-                    if state in x.accepting_states:
-                        new_dfa.mark_accepting(state)
-                new_dfa.add(state)
-            for i in state.all_transitions():
-                if id(i.target) not in visited:
-                    visited.add(id(i.target))
-                    aux(i.target)
+            if DFTransition.Else in actual_else:
+                # just use it
+                actual_else = DFTransition.Else
+            
+            if actual_else: # sometimes you actually don't need one
+                converted_states[processing][actual_else] = treat_as_else
 
-        aux(new_dfa.starting_state)
-
-        dprint[DebugFlag.VERBOSE_CASE_MERGE]("finished")
-        return new_dfa
-
+        return new_dfa, corresponding_finish_states
 
 class Macro:
     def __init__(self, name_token: lark.Token, ast_contents: Node):
@@ -2043,7 +2025,7 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None):
             shape = "triangle"
         g.node(str(id(state)), shape=shape, label=str(j))
         for transition in state.all_transitions():
-            if not transition.target:
+            if not transition.target or not transition.on_values:
                 continue
             label = ",".join(repr(x) for x in transition.on_values)
             label = graphviz.escape(label)
@@ -2114,12 +2096,14 @@ if __name__ == "__main__":
 
     #total = ctx.ast.convert(defaultdict(lambda: None))
 
-    a = ctx.ast.next.match.convert(defaultdict(lambda: None))
-    b = ctx.ast.match.convert(defaultdict(lambda: None))
+    a = ctx.ast.match.convert(defaultdict(lambda: None))
+    b = ctx.ast.next.match.convert(defaultdict(lambda: None))
+    c = ctx.ast.next.next.match.convert(defaultdict(lambda: None))
     debug_dump_dfa(a, 'a')
     debug_dump_dfa(b, 'b')
+    debug_dump_dfa(c, 'c')
 
     g = CaseNode(None)
-    print([a, b])
-    total = g._merge([a, b], None)
+    print([a, b, c])
+    total, cfs = g._merge([a, b, c], None)
     debug_dump_dfa(total, 'out')
