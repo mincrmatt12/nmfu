@@ -13,9 +13,8 @@ import enum
 import string
 import itertools
 import queue
-import copy
 from collections import defaultdict
-from typing import List, Optional, Iterable, Dict, Union
+from typing import List, Optional, Iterable, Dict, Union, Set
 try:
     import graphviz
     debug_enabled = True
@@ -1665,15 +1664,43 @@ class MatchNode(ActionSinkNode):
             base_dfa.append_after(self.next.convert(current_error_handlers))
         return base_dfa
 
-class CaseNode():
+class CaseNode(Node):
     """
     Handles cases
     """
 
-    def __init__(self, sub_matches: Dict[Optional[Match], Node]):
-        self.sub_matches = sub_matches
+    def __init__(self, sub_matches: Dict[Set[Optional[Match]], Node]):
+        super().__init__()
+        self.sub_matches = {k: v for k, v in sub_matches.items() if v is not None}
+        self.empty_matches = [k for k, v in sub_matches.items() if v is None]
+        self.case_match_actions = defaultdict(list)
+        self.next = None
 
-    def _merge(self, ds: List[DFA], treat_as_else: DFState):
+        self._find_case_actions()
+
+    def _find_case_actions(self):
+        """
+        Find all the case actions and delete ActionNodes
+        """
+
+        to_replace = []
+
+        for sub_matches, target in self.sub_matches.items():
+            if not isinstance(target, ActionNode):
+                continue
+
+            # adopt into our internal list
+            self.case_match_actions.update({sub_matches: target.actions})
+            if target.get_next() is not None:
+                self.sub_matches[sub_matches] = target.get_next()
+            else:
+                to_replace.append(sub_matches)
+
+        for i in to_replace:
+            del self.sub_matches[i]
+            self.empty_matches.append(i)
+
+    def _merge(self, ds: Iterable[DFA], treat_as_else: DFState):
         r"""
         Merge the DFAs in the list ds, ensuring that all finishing states are kept as-is.
 
@@ -1813,12 +1840,113 @@ class CaseNode():
             actual_else = alphabet - flat_local_alphabet
             if DFTransition.Else in actual_else:
                 # just use it
-                actual_else = DFTransition.Else
+                actual_else = set((DFTransition.Else,))
             
             if actual_else: # sometimes you actually don't need one
-                converted_states[processing][actual_else] = treat_as_else
+                converted_states[processing].transition(DFTransition(list(actual_else)).to(treat_as_else), allow_replace=True)
 
         return new_dfa, corresponding_finish_states
+
+    def get_next(self):
+        return self.next
+
+    def set_next(self, next_node):
+        if isinstance(next_node, ActionNode):
+            for sub_ast in self.sub_matches.values():
+                # Go to end of sub_ast
+                while sub_ast.get_next() is not None:
+                    sub_ast = sub_ast.get_next()
+
+                # Adopt it
+                sub_ast.set_next(next_node)
+            for empty_match in self.empty_matches:
+                self.case_match_actions[empty_match].extend(next_node.actions)
+        else:
+            self.next = next_node
+
+    def convert(self, current_error_handlers):
+        # IN NEED OF REFACTORING (slightly unclear how it does it's fairly simple job)
+        print(self.empty_matches, self.sub_matches)
+        has_else = any(None in x for x in itertools.chain(self.sub_matches.keys(), self.empty_matches))
+
+        # First, render out all of the sub_dfas
+        sub_dfas = {x: y.convert(current_error_handlers) for x, y in self.sub_matches.items()}
+
+        original_backreference = {}
+        empty_backreference = {}
+        mergeable_ds = set() 
+        # Flatten the sub_matches
+        for sub_matches in self.sub_matches:
+            for sub_match in sub_matches:
+                if sub_match is not None:
+                    converted = sub_match.convert(current_error_handlers)
+                    original_backreference[converted] = sub_matches
+                    mergeable_ds.add(converted)
+                else:
+                    original_backreference[None] = sub_matches
+        for empty_matches in self.empty_matches:
+            for empty_match in empty_matches:
+                if empty_match is not None:
+                    converted = empty_match.convert(current_error_handlers)
+                    original_backreference[converted] = None
+                    empty_backreference[converted] = empty_matches
+                    mergeable_ds.add(converted)
+                else:
+                    original_backreference[None] = None
+                    empty_backreference[converted] = None
+                    empty_backreference[None] = None
+
+        print(mergeable_ds)
+
+        # Create the merged acceptor
+        decider_dfa, corresponding_finish_states = self._merge(mergeable_ds, current_error_handlers[ErrorReasons.NO_MATCH])
+
+        # Check if we need to handle else
+        if has_else:
+            try:
+                else_actions = next(v for k, v in self.case_match_actions.items() if None in k)
+            except StopIteration:
+                else_actions = []
+
+            if original_backreference[None] is not None:
+                for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
+                    trans.to(sub_dfas[original_backreference[None]].starting_state).attach(*else_actions)
+            else:
+                if empty_backreference[None] is not None:
+                    for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
+                        trans.to(sub_dfas[empty_backreference[None]].starting_state).attach(*else_actions)
+                else:
+                    new_state = DFState()
+                    decider_dfa.mark_accepting(new_state)
+                    decider_dfa.add(new_state)
+                    for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
+                        trans.to(new_state).attach(*else_actions)
+
+        # Go through and link up all the states
+        for i in mergeable_ds:
+            if original_backreference[i] is None:
+                true_backref = empty_backreference[i]
+                if true_backref is not None:
+                    # Handle empty matches
+                    all_transitions_empty = set().union(*(decider_dfa.transitions_pointing_to(x) for x in corresponding_finish_states[i]))
+                    print(all_transitions_empty)
+                    if len(all_transitions_empty) != 1 and any(x.is_timing_strict() for x in self.case_match_actions[true_backref]):
+                        raise IllegalDFAStateError("Unable to schedule strict finish action for case", i)
+                    # Add actions
+                    for j in all_transitions_empty:
+                        j.attach(*self.case_match_actions[true_backref])
+            else:
+                refers_to = sub_dfas[original_backreference[i]]
+                print(self.case_match_actions, i, refers_to, original_backreference[i])
+                decider_dfa.append_after(refers_to, corresponding_finish_states[i], chain_actions=self.case_match_actions[original_backreference[i]])
+
+        DebugData.imbue(decider_dfa, DebugTag.PARENT, self)
+
+        # If we need to, add a boring after thing
+        if self.next is not None:
+            decider_dfa.append_after(self.next.convert(current_error_handlers))
+        
+        return decider_dfa
 
 class Macro:
     def __init__(self, name_token: lark.Token, parse_tree: lark.Tree):
@@ -1964,6 +2092,26 @@ class ParseCtx:
         else:
             return None # TODO: int exprs
 
+    def _parse_case_clause(self, clause: lark.Tree):
+        result_set = set()
+        target_dfa = None
+        
+        offset = None 
+
+        for j, predicate in enumerate(clause.children):
+            if predicate.data == "else_predicate":
+                result_set.add(None)
+            elif predicate.data == "expr_predicate":
+                result_set.add(self._parse_match_expr(predicate.children[0]))
+            else:
+                offset = j
+                break
+
+        if offset is not None:
+            target_dfa = self._parse_stmt_seq(clause.children[offset:])
+
+        return frozenset(result_set), target_dfa
+
     def _parse_stmt(self, stmt: lark.Tree) -> Node:
         """
         Parse a statement into a node
@@ -1986,6 +2134,9 @@ class ParseCtx:
             return ActionNode(act)
         elif stmt.data == "assign_stmt":
             return self._parse_assign_stmt(stmt)
+        elif stmt.data == "case_stmt":
+            # Find all of the matches
+            return CaseNode({k: v for k, v in (self._parse_case_clause(x) for x in stmt.children)})
         else:
             raise IllegalParseTree("Unknown statement", stmt)
 
@@ -2093,16 +2244,14 @@ if __name__ == "__main__":
     ctx = ParseCtx(parse_tree)
     ctx.parse()
 
-    #total = ctx.ast.convert(defaultdict(lambda: None))
+    total = ctx.ast.convert(defaultdict(lambda: None))
+    debug_dump_dfa(total)
 
-    a = ctx.ast.match.convert(defaultdict(lambda: None))
-    b = ctx.ast.next.match.convert(defaultdict(lambda: None))
-    c = ctx.ast.next.next.match.convert(defaultdict(lambda: None))
-    debug_dump_dfa(a, 'a')
-    debug_dump_dfa(b, 'b')
-    debug_dump_dfa(c, 'c')
+    #in_arr = []
+    #while hasattr(pos, "match"):
+    #    in_arr.append(pos.match.convert(defaultdict(lambda: None)))
+    #    pos = pos.next
 
-    g = CaseNode(None)
-    print([a, b, c])
-    total, cfs = g._merge([a, b, c], None)
-    debug_dump_dfa(total, 'out')
+    #g = CaseNode(None)
+    #total, cfs = g._merge(in_arr, None)
+    #debug_dump_dfa(total, 'out')
