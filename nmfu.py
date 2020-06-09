@@ -253,7 +253,10 @@ class DFState:
         # Check if we can "inline" this transition
         for transition_in in self.transitions:
             if transition_in.conditions == transition.conditions and transition_in.actions == transition.actions and transition_in.target == transition.target:
-                transition_in.on_values = list(set(transition_in.on_values) | set(transition.on_values))
+                if DFTransition.Else in transition_in.on_values or DFTransition.Else in transition.on_values:
+                    transition_in.on_values = [DFTransition.Else]
+                else:
+                    transition_in.on_values = list(set(transition_in.on_values) | set(transition.on_values))
                 return self
         self.transitions.append(transition)
         return self
@@ -278,7 +281,7 @@ class DFState:
         if type(data) is DFTransition:
             self.transition(DFTransition.from_key(on_values, conditions, data), True)
         else:
-            self.transition(DFTransition(on_values, conditions).to(data), True)
+            self.transition(DFTransition(on_values, conditions).to(data))
 
     def __delitem__(self, key):
         if type(key) in (tuple, list):
@@ -478,7 +481,7 @@ class DebugData:
     _children = defaultdict(list)
     _current_source = []
     _flags = {
-            x: True for x in DebugFlag # todo: make this 0
+            x: False for x in DebugFlag # todo: make this 0
     }
 
     @classmethod
@@ -498,7 +501,7 @@ class DebugData:
         if tag == DebugTag.PARENT:
             DebugData._children[id(value.__repr__.__self__)].append(obj)
         DebugData._collection[id(obj)][tag] = value
-        pass
+        return obj
 
     @classmethod
     def lookup(cls, obj: object, tag: DebugTag, recurse_upwards=True):
@@ -1582,7 +1585,7 @@ class RegexMatch(Match):
         # Create a normal SM
         out_dfa = DFA()
         self._create_dfa_state(self.dfa_2.start_state, out_dfa, True, current_error_handlers[ErrorReasons.NO_MATCH])
-        return out_dfa
+        return DebugData.imbue(out_dfa, DebugTag.PARENT, self)
 
 class WaitMatch(Match):
     def __init__(self, sub_match: Match):
@@ -1730,7 +1733,7 @@ class CaseNode():
             elif len(corresponds_to_finishes_in) == 1:
                 if len(is_part_of) != 1:
                     raise IllegalDFAStateConflictsError("Ambigious case label: should finish or check next", *is_part_of)
-                corresponding_finish_states[next(iter(corresponding_finish_states))].append(new_state)
+                corresponding_finish_states[next(iter(corresponds_to_finishes_in))].append(new_state)
                 new_dfa.mark_accepting(new_state)
 
             # Add the state
@@ -1746,6 +1749,7 @@ class CaseNode():
             processing = to_process.get()
 
             local_alphabet = set()
+
             # grab the local alphabet as a set of sets (on_values) IGNORING things that go to else_path
             for _, sub_state in processing:
                 for trans in sub_state.transitions:
@@ -1773,23 +1777,18 @@ class CaseNode():
 
             # process all moves with those sets as alphabets
 
-            print(local_alphabet)
-
             for symbol in local_alphabet:
                 # construct the set of next states
                 next_state = set()
                 for (sub_dfa, sub_state) in processing:
-                    print(sub_state.transitions)
                     potential_transition = sub_state[symbol]
-                    print(potential_transition)
                     if potential_transition is None:
-                        raise RuntimeError("illegal splitting state")
+                        continue
                     if potential_transition.target == treat_as_else:
                         continue
                     else:
                         next_state.add((sub_dfa, potential_transition.target))
 
-                print(next_state)
                 if not next_state:
                     continue
 
@@ -1807,10 +1806,11 @@ class CaseNode():
             if converted_states[processing] in new_dfa.accepting_states:
                 continue
 
+
             # construct the actual else transition based on the inverse of alphabet
             flat_local_alphabet = set(itertools.chain(*local_alphabet))
-            actual_else = alphabet - flat_local_alphabet
 
+            actual_else = alphabet - flat_local_alphabet
             if DFTransition.Else in actual_else:
                 # just use it
                 actual_else = DFTransition.Else
@@ -1821,12 +1821,11 @@ class CaseNode():
         return new_dfa, corresponding_finish_states
 
 class Macro:
-    def __init__(self, name_token: lark.Token, ast_contents: Node):
+    def __init__(self, name_token: lark.Token, parse_tree: lark.Tree):
         self.name = name_token.value
-        self.ast = ast_contents
+        self.parse_tree = parse_tree
         DebugData.imbue(self, DebugTag.SOURCE_LINE, name_token.line)
         DebugData.imbue(self, DebugTag.NAME, "macro " + self.name)
-        DebugData.imbue(ast_contents, DebugTag.PARENT, self)
 
 class ParseCtx:
     def __init__(self, parse_tree: lark.Tree):
@@ -1842,7 +1841,7 @@ class ParseCtx:
             self.state_object_spec[out_obj.name] = out_obj
         # Parse macros
         for macro in self._parse_tree.find_data("macro_decl"):
-            macro_obj = Macro(macro.children[0], self._parse_stmt_seq(macro.children[1:]))
+            macro_obj = Macro(macro.children[0], macro.children[1:])
             self.macros[macro_obj.name] = macro_obj
         # Parse main
         parser_decl = next(self._parse_tree.find_data("parser_decl"))
@@ -1976,7 +1975,7 @@ class ParseCtx:
         elif stmt.data == "call_stmt":
             try:
                 name = stmt.children[0].value
-                return self.macros[name].ast
+                return DebugData.imbue(self._parse_stmt_seq(self.macros[name].parse_tree), DebugTag.PARENT, self.macros[name])
             except KeyError:
                 pass
             raise UndefinedReferenceError("macro", stmt.children[0])

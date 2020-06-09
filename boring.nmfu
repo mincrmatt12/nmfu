@@ -1,0 +1,25 @@
+// tst?
+
+out str[32] url;
+
+parser {
+	/"T(es)|(se)t-\w\w\w+e:"/;
+	/"Test-\w\w\d+:"/;
+	/"Test-.ofio123:"/;
+
+	"GET";
+	"POST";
+	"PUT";
+
+	/"[^"]+a":/;
+	/"[^"]+b"/;
+	/"[^"]+c"/;
+
+    // The more common method of reading "arbitrary" input:
+
+    url = /\/[\/a-zA-Z0-9.\-_?=&+]*/;
+
+    / HTTP\/1\.\d/;
+
+	end;
+}
