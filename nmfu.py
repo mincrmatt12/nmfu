@@ -716,6 +716,18 @@ class AppendTo(Action, HasDefaultDebugInfo):
         if tag == DebugTag.NAME:
             return "append action ({})".format(DebugData.lookup(self.into_storage, DebugTag.NAME))
 
+class SetTo(Action, HasDefaultDebugInfo):
+    def __init__(self, value_expr: "IntegerExpr", into_storage: "OutputStorage"):
+        self.into_storage = into_storage
+        self.value_expr = value_expr
+
+    def get_mode(self):
+        return ActionMode.AT_FINISH
+
+    def debug_lookup(self, tag: DebugTag):
+        if tag == DebugTag.NAME:
+            return "set into {}".format(DebugData.lookup(self.into_storage, DebugTag.NAME))
+
 class Node(abc.ABC):
     """
     Represents an arbitrary AST node:
@@ -2027,7 +2039,7 @@ class ParseCtx:
         elif type_obj.data == "str_type":
             return OutputStorage(OutputStorageType.STR, name, default_value=default_value, str_size=int(type_obj.children[0].value))
 
-    def _parse_integer_expr(self, expr: lark.Tree) -> IntegerExpr:
+    def _parse_integer_expr(self, expr: lark.Tree, into_storage: OutputStorage=None) -> IntegerExpr:
         """
         Parse an integer type expr (also has bool/etc.)
         """
@@ -2038,6 +2050,20 @@ class ParseCtx:
 
         if expr.data == "number_const":
             val = LiteralIntegerExpr(int(expr.children[0].value))
+            DebugData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
+            DebugData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
+            return val
+        elif expr.data == "identifier_const":
+            if into_storage is None:
+                raise IllegalParseTree("Undefined enumeration value, no into_storage", expr)
+
+            if into_storage.type != OutputStorageType.ENUM:
+                raise IllegalParseTree("Use of enumeration constant for non-enumeration type output", expr)
+
+            if expr.children[0].value not in into_storage.enum_values:
+                raise UndefinedReferenceError("enumeration constant", expr)
+            
+            val = LiteralIntegerExpr(expr.children[0].value, OutputStorageType.ENUM)
             DebugData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
             DebugData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
             return val
@@ -2091,7 +2117,8 @@ class ParseCtx:
             match_node.match.attach(AppendTo(None, targeted))
             return match_node
         else:
-            return None # TODO: int exprs
+            # TODO: try to check the return type
+            return ActionNode(SetTo(self._parse_integer_expr(stmt.children[1], targeted), targeted))
 
     def _parse_case_clause(self, clause: lark.Tree):
         result_set = set()
