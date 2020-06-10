@@ -785,7 +785,10 @@ class SetTo(Action, HasDefaultDebugInfo):
 
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
-            return "set into {}".format(DebugData.lookup(self.into_storage, DebugTag.NAME))
+            if self.value_expr.is_literal():
+                return "set into {} {}".format(DebugData.lookup(self.into_storage, DebugTag.NAME), self.value_expr.get_literal_result())
+            else:
+                return "set into {}".format(DebugData.lookup(self.into_storage, DebugTag.NAME))
 
 class SetToStr(Action, HasDefaultDebugInfo):
     def __init__(self, value_expr: str, into_storage: "OutputStorage"):
@@ -2640,6 +2643,175 @@ def debug_dump_regexnfa(nfa: RegexNFA, out_name="nfa"):
 
     g.render(out_name, format="pdf", cleanup=True)
 
+def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=None, make_subgraph=None):
+    if into is None:
+        g = graphviz.Digraph(name='ast')
+        g.attr(ranksep="0.01", rankdir="LR", labeljust="l")
+        idx = 0
+        sidx = 0
+
+        def _make_id():
+            nonlocal idx
+            idx += 1
+            return f"a_{idx}"
+
+        def _make_sid():
+            nonlocal sidx
+            sidx += 1
+            return f"cluster_{idx}"
+        
+        debug_dump_ast(ast, into=g, coming_from=[], make_id=_make_id, make_subgraph=_make_sid)
+
+        g.render(out_name, format="pdf", cleanup=True)
+        return
+
+    def label_of(x):
+        base = type(x).__name__
+        if type(x).__repr__ != object.__repr__:
+            base = repr(x)
+
+        name = DebugData.lookup(x, DebugTag.NAME, recurse_upwards=False)
+        if name:
+            base += f" ({name})"
+
+        return graphviz.escape(base)
+
+    def tie_to(sources, cfrm=None, extra_kwargs=None):
+        if cfrm is None:
+            cfrm = coming_from
+        print(cfrm)
+        if type(sources) is str:
+            sources = [sources]
+        for i in sources:
+            for x in cfrm:
+                if x:
+                    if extra_kwargs:
+                        into.edge(x, i, **extra_kwargs)
+                    else:
+                        into.edge(x, i)
+    
+    with into.subgraph(name=make_subgraph()) as c:
+        c.attr(label=label_of(ast))
+
+        if isinstance(ast, ActionNode):
+            # Add nodes for each action
+            
+            for action in ast.actions:
+                node = make_id()
+                c.node(node, label=label_of(action))
+                tie_to(node)
+                coming_from = [node]
+
+        elif isinstance(ast, MatchNode):
+            # List the adopted actions
+            for name, l in zip(("start", "each", "finish"), (ast.match.start_actions, ast.match.char_actions, ast.match.finish_actions)):
+                if not l:
+                    continue
+                node = make_id()
+                c.node(node, f"{name}: {','.join(label_of(x) for x in l)}", style="filled", color="white")
+
+            # Put the match in as a node
+            node = make_id()
+            c.node(node, label=label_of(ast.match))
+            tie_to(node)
+
+            coming_from = [node]
+
+        elif isinstance(ast, CaseNode):
+            start_node = make_id()
+            c.node(start_node, "", style="filled", shape="circle", color="grey")
+            tie_to(start_node)
+
+            next_coming_from = []
+            
+            for empty_matches in ast.empty_matches:
+                for empty_match in empty_matches:
+                    if empty_match is None:
+                        ematch_node = make_id()
+                        c.node(ematch_node, "else", color="orange")
+                    else:
+                        ematch_node = make_id()
+                        c.node(ematch_node, label_of(empty_match), color="orange")
+
+                    tie_to(ematch_node, [start_node], extra_kwargs={"label": "\n".join(label_of(x) for x in ast.case_match_actions[empty_matches])})
+                    next_coming_from.append(ematch_node)
+
+            for real_matches, sub_ast in ast.sub_matches.items():
+                sub_coming_from = []
+                for real_match in real_matches:
+                    if real_match is None:
+                        ematch_node = make_id()
+                        c.node(ematch_node, "else")
+                    else:
+                        ematch_node = make_id()
+                        c.node(ematch_node, label_of(real_match))
+
+                    tie_to(ematch_node, [start_node], extra_kwargs={"label": "\n".join(label_of(x) for x in ast.case_match_actions[real_matches])})
+                    sub_coming_from.append(ematch_node)
+
+                next_coming_from.extend(debug_dump_ast(sub_ast, into=c, coming_from=sub_coming_from, make_id=make_id, make_subgraph=make_subgraph))
+
+            coming_from = next_coming_from
+        
+        elif isinstance(ast, OptionalNode):
+            # List the adopted actions
+            for name, l in zip(("start", "finish"), (ast.start_actions, ast.finish_actions)):
+                if not l:
+                    continue
+                node = make_id()
+                c.node(node, f"{name}: {','.join(label_of(x) for x in l)}", style="filled", color="white")
+
+            start_node = make_id()
+            c.node(start_node, "", style="filled", shape="circle", color="grey")
+            tie_to(start_node)
+
+            coming_from = [start_node, *debug_dump_ast(ast.sub_contents, into=c, coming_from=[start_node], make_id=make_id, make_subgraph=make_subgraph)]
+        
+        elif isinstance(ast, LoopNode):
+            start_node = make_id()
+            c.node(start_node, "", style="filled", shape="circle", color="grey")
+            tie_to(start_node)
+
+            end_node = make_id()
+            c.node(end_node, "end", shape="circle", color="orange")
+            coming_from = [end_node]
+
+            if ast.loop_start_actions:
+                c.node(make_id(), f"start: " + ",".join(label_of(x) for x in ast.loop_start_actions), style="filled", color="white")
+
+            into.edge(start_node, end_node, label="break" + "\n".join(label_of(x) for x in ast.after_break_actions), color="blue")
+
+            tie_to(end_node, cfrm=debug_dump_ast(ast.child_node, into=c, coming_from=[start_node], make_id=make_id, make_subgraph=make_subgraph))
+
+        elif isinstance(ast, TryExceptNode):
+            next_coming_from = debug_dump_ast(ast.body, into=c, coming_from=coming_from, make_id=make_id, make_subgraph=make_subgraph)
+
+            handler_start = make_id()
+            c.node(handler_start, "catch " + ",".join(x.value for x in ast.handles), color="orange")
+
+            if ast.incoming_body_actions:
+                c.node(make_id(), f"start: " + ",".join(label_of(x) for x in ast.incoming_body_actions), style="filled", color="white")
+
+            if ast.incoming_handler_actions:
+                c.node(make_id(), f"hstart: " + ",".join(label_of(x) for x in ast.incoming_handler_actions), style="filled", color="white")
+
+            if not ast.handles:
+                next_coming_from.append(handler_start)
+            else:
+                next_coming_from.extend(debug_dump_ast(ast.handler, into=c, coming_from=[handler_start], make_id=make_id, make_subgraph=make_subgraph))
+
+            coming_from = next_coming_from
+
+        else:
+            node = make_id()
+            c.node(node, "?", color="blue")
+            tie_to(node)
+            coming_from = [node]
+            
+    if ast.get_next():
+        return debug_dump_ast(ast.get_next(), into=into, coming_from=coming_from, make_id=make_id, make_subgraph=make_subgraph)
+    return coming_from
+
 def debug_dump_regextree(rx, indent=0):
     def lprint(*args, **kwargs):
         print(" "*indent, end="")
@@ -2662,22 +2834,24 @@ def debug_dump_regextree(rx, indent=0):
         debug_dump_regextree(rx.sub_match, indent=indent+1)
 
 if __name__ == "__main__":
-    with open("boring.nmfu") as f:
+    with open("boring2.nmfu") as f:
         contents = f.read()
 
     DebugData.load_source(contents)
     parse_tree = parser.parse(contents)
 
-    lark.tree.pydot__tree_to_png(parse_tree, "test3.png")
-
     pctx = ParseCtx(parse_tree)
     pctx.parse()
 
+    debug_dump_ast(pctx.ast)
+
+    print("b")
     dctx = DfaCompileCtx(pctx)
     dctx.compile()
 
     total = dctx.dfa
 
+    print("c")
     #debug_dump_dfa(dctx.dfa)
 
     #in_arr = []
