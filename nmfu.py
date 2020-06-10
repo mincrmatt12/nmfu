@@ -202,7 +202,10 @@ class DFTransition:
         return my_copy
 
     def __repr__(self):
-        return f"<DFTransition on={self.on_values} to={self.target}>"
+        if self.actions:
+            return f"<DFTransition on={self.on_values} to={self.target} actions={self.actions}>"
+        else:
+            return f"<DFTransition on={self.on_values} to={self.target}>"
 
     def restrict(self, *conditions):
         self.conditions.extend(conditions)
