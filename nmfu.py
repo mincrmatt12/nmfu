@@ -2255,7 +2255,6 @@ class ParseCtx:
         self.ast = None
         self.start_actions = []
 
-        # TODO: store a global "error handler fault state"
         self.exception_handlers = defaultdict(lambda: None)  # normal ErrorReason -> State
         self.break_handlers = {}      # "string name" -> Action
         self.innermost_break_handler = None  # just an Action
