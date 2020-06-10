@@ -18,6 +18,7 @@ from typing import List, Optional, Iterable, Dict, Union, Set
 try:
     import graphviz
     debug_enabled = True
+    import lark.tree
 except ImportError:
     debug_enabled = False
 
