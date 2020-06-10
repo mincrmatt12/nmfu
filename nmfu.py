@@ -1908,7 +1908,6 @@ class CaseNode(Node):
                     mergeable_ds.add(converted)
                 else:
                     original_backreference[None] = None
-                    empty_backreference[converted] = None
                     empty_backreference[None] = None
 
         print(mergeable_ds)
@@ -1923,19 +1922,25 @@ class CaseNode(Node):
             except StopIteration:
                 else_actions = []
 
+            # Is there a sub-DFA (actual clause to execute) for the else transition?
             if original_backreference[None] is not None:
                 for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
                     trans.to(sub_dfas[original_backreference[None]].starting_state).attach(*else_actions)
+                # We have to add that DFA's state to the overall dfa's states array, since it won't get picked up by mergable_ds _UNLESS_ original_backreference contains more than frozenset({None})
+                if len(original_backreference[None]) == 1:
+                    print("else4")
+                    for state in sub_dfas[original_backreference[None]].states:
+                        if state in sub_dfas[original_backreference[None]].accepting_states:
+                            decider_dfa.mark_accepting(state)
+                        decider_dfa.add(state)
             else:
-                if empty_backreference[None] is not None:
-                    for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
-                        trans.to(sub_dfas[empty_backreference[None]].starting_state).attach(*else_actions)
-                else:
-                    new_state = DFState()
-                    decider_dfa.mark_accepting(new_state)
-                    decider_dfa.add(new_state)
-                    for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
-                        trans.to(new_state).attach(*else_actions)
+                # Otherwise, make up our own very stupid one.
+                print("else3")
+                new_state = DFState()
+                decider_dfa.mark_accepting(new_state)
+                decider_dfa.add(new_state)
+                for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
+                    trans.to(new_state).attach(*else_actions)
 
         # Go through and link up all the states
         for i in mergeable_ds:
