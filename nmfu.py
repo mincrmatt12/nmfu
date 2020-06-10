@@ -1954,7 +1954,6 @@ class CaseNode(Node):
 
     def convert(self, current_error_handlers):
         # IN NEED OF REFACTORING (slightly unclear how it does it's fairly simple job)
-        print(self.empty_matches, self.sub_matches)
         has_else = any(None in x for x in itertools.chain(self.sub_matches.keys(), self.empty_matches))
 
         # First, render out all of the sub_dfas
@@ -1983,8 +1982,6 @@ class CaseNode(Node):
                     original_backreference[None] = None
                     empty_backreference[None] = None
 
-        print(mergeable_ds)
-
         # Create the merged acceptor
         decider_dfa, corresponding_finish_states = self._merge(mergeable_ds, current_error_handlers[ErrorReasons.NO_MATCH])
 
@@ -2001,14 +1998,12 @@ class CaseNode(Node):
                     trans.to(sub_dfas[original_backreference[None]].starting_state).attach(*else_actions)
                 # We have to add that DFA's state to the overall dfa's states array, since it won't get picked up by mergable_ds _UNLESS_ original_backreference contains more than frozenset({None})
                 if len(original_backreference[None]) == 1:
-                    print("else4")
                     for state in sub_dfas[original_backreference[None]].states:
                         if state in sub_dfas[original_backreference[None]].accepting_states:
                             decider_dfa.mark_accepting(state)
                         decider_dfa.add(state)
             else:
                 # Otherwise, make up our own very stupid one.
-                print("else3")
                 new_state = DFState()
                 decider_dfa.mark_accepting(new_state)
                 decider_dfa.add(new_state)
@@ -2022,7 +2017,6 @@ class CaseNode(Node):
                 if true_backref is not None:
                     # Handle empty matches
                     all_transitions_empty = set().union(*(decider_dfa.transitions_pointing_to(x) for x in corresponding_finish_states[i]))
-                    print(all_transitions_empty)
                     if len(all_transitions_empty) != 1 and any(x.is_timing_strict() for x in self.case_match_actions[true_backref]):
                         raise IllegalDFAStateError("Unable to schedule strict finish action for case", i)
                     # Add actions
@@ -2030,7 +2024,6 @@ class CaseNode(Node):
                         j.attach(*self.case_match_actions[true_backref])
             else:
                 refers_to = sub_dfas[original_backreference[i]]
-                print(self.case_match_actions, i, refers_to, original_backreference[i])
                 decider_dfa.append_after(refers_to, corresponding_finish_states[i], chain_actions=self.case_match_actions[original_backreference[i]])
 
         DebugData.imbue(decider_dfa, DebugTag.PARENT, self)
@@ -2371,8 +2364,8 @@ class ParseCtx:
 
             try:
                 return LiteralIntegerExpr({"true": 1, "false": 0}[expr.children[0].value], result_type)
-            except KeyError:
-                raise UndefinedReferenceError("boolean constant", expr.children[0])
+            except KeyError as e:
+                raise UndefinedReferenceError("boolean constant", expr.children[0]) from e
         else:
             raise IllegalParseTree("Invalid expression in integer expr", expr)
 
@@ -2519,8 +2512,8 @@ class ParseCtx:
                 for option in catch_block.children[0].children:
                     try:
                         catch_handles.add(ErrorReasons(option.value))
-                    except ValueError:
-                        raise UndefinedReferenceError("error type", option)
+                    except ValueError as e:
+                        raise UndefinedReferenceError("error type", option) from e
 
             body_block_stmts = stmt.children[:-1]
             try_node = TryExceptNode(catch_handles)
@@ -2591,13 +2584,18 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None):
                 continue
             label = ",".join(repr(x) for x in transition.on_values)
             label = graphviz.escape(label)
+            is_real = True
+
             for action in transition.actions:
                 acname = DebugData.lookup(action, DebugTag.NAME, recurse_upwards=False)
                 if acname:
                     label += "\n{}".format(acname)
                 if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.MAY_GOTO_TARGET]:
                     g.edge(str(id(state)), str(id(action.get_target_override_target())), label=f"{acname} side effect")
-            g.edge(str(id(state)), str(id(transition.target)), label=label)
+                if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER]:
+                    is_real = False
+            if is_real:
+                g.edge(str(id(state)), str(id(transition.target)), label=label)
 
     g.render(out_name, format="pdf", cleanup=True)
 
@@ -2665,7 +2663,7 @@ if __name__ == "__main__":
 
     total = dctx.dfa
 
-    debug_dump_dfa(dctx.dfa)
+    #debug_dump_dfa(dctx.dfa)
 
     #in_arr = []
     #while hasattr(pos, "match"):
