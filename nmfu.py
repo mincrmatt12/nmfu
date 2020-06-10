@@ -552,9 +552,11 @@ class DebugData:
             else:
                 return None
 
-        if tag not in DebugData._collection[id(obj)]:
-            if DebugTag.PARENT in DebugData._collection[id(obj)] and recurse_upwards:
-                val = cls.lookup(DebugData._collection[id(obj)][DebugTag.PARENT], tag)
+        id_obj = id(obj) if type(obj) is not int else obj
+
+        if tag not in DebugData._collection[id_obj]:
+            if DebugTag.PARENT in DebugData._collection[id_obj] and recurse_upwards:
+                val = cls.lookup(DebugData._collection[id_obj][DebugTag.PARENT], tag)
                 if val is not None:
                     return val
             if isinstance(obj, HasDefaultDebugInfo):
@@ -562,12 +564,12 @@ class DebugData:
                 if val is not None:
                     return val
             if tag in (DebugTag.SOURCE_COLUMN, DebugTag.SOURCE_LINE):
-                for i in cls._children[id(obj)]:
+                for i in cls._children[id_obj]:
                     val = cls.lookup(i, tag, recurse_upwards=False)
                     if val is not None:
                         return val
             return None
-        return DebugData._collection[id(obj)][tag]
+        return DebugData._collection[id_obj][tag]
 
     @classmethod
     def get_source_line(cls, line: int):
