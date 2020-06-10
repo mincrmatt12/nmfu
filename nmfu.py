@@ -1993,30 +1993,183 @@ class OptionalNode(ActionSinkNode):
 
     def convert(self, current_error_handlers):
         sub_dfa = self.sub_contents.convert(current_error_handlers)
-        if sub_dfa.starting_state[DFTransition.Else].target != current_error_handlers[ErrorReasons.NO_MATCH]:
-            raise IllegalDFAStateError("Unable to add an else transition to first state of optional; try using a case with empty else for this situation", sub_dfa)
+        if sub_dfa.starting_state in sub_dfa.accepting_states:
+            raise IllegalDFAStateError("Ambigious path in optional: should use optional or go to next", sub_dfa)
 
-        new_else_state = DFState()
-        sub_dfa.add(new_else_state)
-        DebugData.imbue(new_else_state, DebugTag.PARENT, self)
-        sub_dfa.mark_accepting(new_else_state)
+        sub_dfa.mark_accepting(sub_dfa.starting_state)
 
-        sub_dfa.starting_state[DFTransition.Else] = new_else_state
-
-        # Add starting transitions
+        # Add starting actions
         for trans in sub_dfa.starting_state.transitions:
             trans.attach(*self.start_actions)
 
-        # Add finish actions
-        for trans in itertools.chain(*(sub_dfa.transitions_pointing_to(x) for x in sub_dfa.accepting_states)):
-            trans.attach(*self.finish_actions)
-
         # If we need to, add a boring after thing
         if self.next is not None:
+            sub_dfa.append_after(self.next.convert(current_error_handlers), chain_actions=self.finish_actions)
+
+        return sub_dfa
+
+class LoopNode(ActionSinkNode, HasDefaultDebugInfo):
+    def __init__(self, name):
+        self.name = name
+        self.next = None
+        self.after_break_actions = []
+        self.loop_start_actions = []
+        self.child_node = None
+
+        self.break_action = BreakAction(id(self))
+    
+    def debug_lookup(self, tag):
+        if tag == DebugTag.NAME:
+            return "loop node {}".format(self.name)
+
+    def _set_next(self, next_node):
+        self.next = next_node
+
+    def get_next(self):
+        return self.next
+
+    def _adopt_actions(self, actions):
+        if any(x.get_mode() != ActionMode.AT_FINISH for x in actions):
+            raise IllegalASTStateError("Invalid action type for loop", self)
+
+        self.after_break_actions.extend(actions)
+
+    def get_break_handler(self):
+        return self.break_action
+
+    def set_child(self, child: Node):
+        if isinstance(child, ActionNode):
+            self.after_break_actions = child.actions
+            child = child.get_next()
+        self.child_node = child
+
+    def convert(self, current_error_handlers):
+        if self.child_node is None:
+            raise IllegalDFAStateError("Empty loop body", self)
+        # First, create the sub_dfa 
+        sub_dfa = self.child_node.convert(current_error_handlers)
+
+        # Attempt to add the loop start actions to the start state
+        for transition in sub_dfa.starting_state.all_transitions():
+            transition.attach(*self.loop_start_actions)
+
+        # Create the finish state
+        end_state = DFState()
+        DebugData.imbue(end_state, DebugTag.PARENT, self)
+        sub_dfa.add(end_state)
+        # don't mark it accepting yet
+
+        should_try_to_append = False
+
+        # Reroute all transitions with a BreakAction in them that corresponds to our break action to go to us
+        for transition in sub_dfa.transitions_that_do(self.break_action):
+            transition.to(end_state)
+            transition.actions.remove(self.break_action)
+            should_try_to_append = True
+
+        # Verify that the accepting states are all distinct
+        for accept_state in sub_dfa.accepting_states:
+            for transition in accept_state.all_transitions():
+                if transition.target in sub_dfa.accepting_states:
+                    raise IllegalDFAStateConflictsError("Ambigious loop: should loop or continue matching", accept_state, transition.target)
+
+        # Replace all transitions that go to the finishing states with transitions that go to the sub_dfa starting state
+        for transition in itertools.chain(*(sub_dfa.transitions_pointing_to(x) for x in sub_dfa.accepting_states)):
+            transition.to(sub_dfa.starting_state)
+
+        sub_dfa.accepting_states = [end_state]
+        
+        if self.next and not should_try_to_append:
+            raise IllegalASTStateError("Unreachable states after loop", self.next)
+
+        elif should_try_to_append and self.next:
             sub_dfa.append_after(self.next.convert(current_error_handlers))
 
         return sub_dfa
 
+class TryExceptNode(ActionSinkNode):
+    def __init__(self, handles):
+        self.handler_node = DFState()
+        self.handles = handles
+        self.after_actions = []
+        self.incoming_handler_actions = []
+        self.incoming_body_actions = []
+
+        self.body = None
+        self.handler = None
+
+        self.next = None
+
+    def get_handler(self):
+        return self.handler_node
+
+    def set_body(self, body):
+        if isinstance(body, ActionNode):
+            self.incoming_body_actions = body.actions
+            body = body.get_next()
+        self.body = body
+
+    def set_handler(self, handler):
+        if isinstance(handler, ActionNode):
+            self.incoming_handler_actions = handler.actions
+            handler = handler.get_next()
+        self.handler = handler
+
+    def _adopt_actions(self, actions):
+        if any(x.get_mode() != ActionMode.AT_FINISH for x in actions):
+            raise IllegalASTStateError("Invalid action type following try-except", self)
+            
+        self.after_actions.extend(actions)
+
+    def _set_next(self, next_node):
+        self.next = next_node
+
+    def get_next(self):
+        return self.next
+
+    def convert(self, current_error_handlers):
+        if self.body is None:
+            raise IllegalASTStateError("Empty try-except body", self)
+        # Convert the main DFA to form the "sub-dfa"
+
+        body_error_handlers = current_error_handlers.copy()
+        body_error_handlers.update({x: self.handler_node for x in self.handles})
+
+        sub_dfa: DFA = self.body.convert(body_error_handlers)
+
+        # Add the incoming_body_actions array to all incoming actions
+        for trans in sub_dfa.starting_state.transitions:
+            trans.attach(*self.incoming_body_actions)
+
+        def add_finish_to(dfa):
+            if any(any(x.target in dfa.accepting_states for x in y.all_transitions()) for y in dfa.accepting_states) and any(x.is_timing_strict() for x in self.after_actions):
+                raise IllegalASTStateError("Unable to schedule finish action for try-except at strict time", dfa)
+
+            for trans in itertools.chain(*(dfa.transitions_pointing_to(x) for x in dfa.accepting_states)):
+                trans.attach(*self.after_actions)
+
+        add_finish_to(sub_dfa)
+
+        # This _should_ have transitions going to the handler node. Add it to the tree now
+        sub_dfa.add(self.handler_node)
+
+        # If there _is_ a handler, add it after
+        if self.handler is not None:
+            handler_dfa = self.handler.convert(current_error_handlers)
+            add_finish_to(handler_dfa)
+            sub_dfa.append_after(handler_dfa, sub_states=[self.handler_node], chain_actions=self.incoming_handler_actions)
+        else:
+            # Otherwise, just mark the handler as a finish state
+            sub_dfa.mark_accepting(self.handler_node)
+            # And add the finish actions to everything that pointed at it
+            for trans in sub_dfa.transitions_pointing_to(self.handler_node):
+                trans.attach(*self.incoming_handler_actions).attach(*self.after_actions)
+
+        # If there is a next node, append it
+        if self.next is not None:
+            sub_dfa.append_after(self.next.convert(current_error_handlers))
+
+        return sub_dfa
 
 class Macro:
     def __init__(self, name_token: lark.Token, parse_tree: lark.Tree):
