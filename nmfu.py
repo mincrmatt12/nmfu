@@ -2548,6 +2548,18 @@ class DfaCompileCtx:
         self.ast = parse_ctx.ast
         self.start_actions = parse_ctx.start_actions
         self.generic_fail_state = DFState()
+        self.dfa = None
+
+    def _optimize_remove_inaccessible(self):
+        accessible = self.dfa.dfs()
+        mod = 0
+        for i in self.dfa.states.copy():
+            if i not in accessible:
+                mod += 1
+                self.dfa.states.remove(i)
+        print("removed {} nonaccessible".format(mod))
+        return mod
+
 
     def compile(self):
         """
@@ -2556,6 +2568,9 @@ class DfaCompileCtx:
 
         self.dfa = self.ast.convert(defaultdict(lambda: self.generic_fail_state))
         self.dfa.add(self.generic_fail_state)
+
+        while self._optimize_remove_inaccessible():
+            pass
 
 # =============
 # DEBUG DUMPERS
