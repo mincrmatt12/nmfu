@@ -1014,6 +1014,10 @@ class OutputStorage(HasDefaultDebugInfo):
 # INTEGER EXPR TYPES
 # ==================
 
+class IntegerExprUseContext(enum.Enum):
+    ASSIGN_ON_MATCH = 0
+    ASSIGN_INITIAL = 1
+
 class IntegerExpr(abc.ABC):
     @abc.abstractmethod
     def result_type(self) -> OutputStorageType:
@@ -1034,6 +1038,12 @@ class IntegerExpr(abc.ABC):
         Evaluate to a native python representation
         """
         return None
+
+    def get_invalid_contexts(self):
+        """
+        Return an iterable of all the contexts in which this expression is invalid
+        """
+        return []
 
 class LiteralIntegerExpr(IntegerExpr):
     def __init__(self, value, typ: OutputStorageType = OutputStorageType.INT):
