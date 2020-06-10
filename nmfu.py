@@ -2333,6 +2333,10 @@ class Macro:
         DebugData.imbue(self, DebugTag.SOURCE_LINE, name_token.line)
         DebugData.imbue(self, DebugTag.NAME, "macro " + self.name)
 
+# =========
+# PARSE CTX
+# =========
+
 class ParseCtx:
     def __init__(self, parse_tree: lark.Tree):
         self._parse_tree = parse_tree
@@ -2814,7 +2818,6 @@ def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=Non
     def tie_to(sources, cfrm=None, extra_kwargs=None):
         if cfrm is None:
             cfrm = coming_from
-        print(cfrm)
         if type(sources) is str:
             sources = [sources]
         for i in sources:
@@ -2914,7 +2917,7 @@ def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=Non
             if ast.loop_start_actions:
                 c.node(make_id(), f"start: " + ",".join(label_of(x) for x in ast.loop_start_actions), style="filled", color="white")
 
-            into.edge(start_node, end_node, label="break" + "\n".join(label_of(x) for x in ast.after_break_actions), color="blue")
+            into.edge(start_node, end_node, label="break\n" + "\n".join(label_of(x) for x in ast.after_break_actions), color="blue")
 
             tie_to(end_node, cfrm=debug_dump_ast(ast.child_node, into=c, coming_from=[start_node], make_id=make_id, make_subgraph=make_subgraph))
 
@@ -2969,7 +2972,7 @@ def debug_dump_regextree(rx, indent=0):
         debug_dump_regextree(rx.sub_match, indent=indent+1)
 
 if __name__ == "__main__":
-    with open("boring2.nmfu") as f:
+    with open("http.nmfu") as f:
         contents = f.read()
 
     DebugData.load_source(contents)
@@ -2987,7 +2990,7 @@ if __name__ == "__main__":
     total = dctx.dfa
 
     print("c")
-    #debug_dump_dfa(dctx.dfa)
+    debug_dump_dfa(dctx.dfa)
 
     #in_arr = []
     #while hasattr(pos, "match"):
