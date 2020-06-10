@@ -1612,7 +1612,8 @@ class WaitMatch(Match):
 
     def convert(self, current_error_handlers: dict):
         sm = self.match_contents.convert(current_error_handlers)
-        sm.starting_state.or_else(sm.starting_state, *self.char_actions)
+        for trans in sm.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
+            trans.to(sm.starting_state)
         return sm
 
 class EndMatch(Match):
