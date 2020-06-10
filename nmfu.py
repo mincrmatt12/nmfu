@@ -1600,7 +1600,7 @@ class RegexMatch(Match):
             if isinstance(source, InvertedRegexCharClass):
                 # TODO: handle multiple of these
                 # Convert to a normal set
-                new_transitions[source.chars] = (else_path, False)
+                new_transitions[source.chars | frozenset((DFTransition.End,))] = (else_path, False)
                 new_transitions[frozenset((DFTransition.Else,))] = (self._create_dfa_state(target, into, False, else_path), target in self.dfa_2.finishing_states)
             else:
                 new_transitions[source.chars] = (self._create_dfa_state(target, into, False, else_path), target in self.dfa_2.finishing_states)
