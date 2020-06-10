@@ -2347,7 +2347,7 @@ class ParseCtx:
                 raise IllegalParseTree("Undefined enumeration value, no into_storage", expr)
 
             if into_storage.type != OutputStorageType.ENUM:
-                raise IllegalParseTree("Use of enumeration constant for non-enumeration type output", expr)
+                raise IllegalParseTree("Use of enumeration constant for non-enumeration type output (perhaps you meant to use []?)", expr)
 
             if expr.children[0].value not in into_storage.enum_values:
                 raise UndefinedReferenceError("enumeration constant", expr)
