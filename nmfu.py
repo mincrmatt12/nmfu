@@ -378,14 +378,12 @@ class DFA:
 
         return position
 
-    def transitions_pointing_to(self, target_state: DFState):
+    def dfs(self):
         """
-        Return a set of all transitions that point to the target state that are reachable
-        from the start state
+        Construct a dfs-order traversal of the DFA
         """
 
         visited = set()
-        result = set()
 
         def aux(state):
             if not state:
@@ -395,11 +393,53 @@ class DFA:
             visited.add(state)
 
             for t in state.all_transitions():
-                if t.target == target_state:
-                    result.add(t)
-                aux(t.target)
+                use_real = True
+                for action in t.actions:
+                    if action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_OTHER:
+                        use_real = False
+                        aux(action.get_target_override_target())
+                    elif action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_UNDEFINED:
+                        use_real = False
+                    elif action.get_target_override_mode() == ActionOverrideMode.MAY_GOTO_TARGET:
+                        aux(action.get_target_override_target())
+                    else:
+                        continue
+                    break
+                if use_real:
+                    aux(t.target)
 
         aux(self.starting_state)
+        return visited
+
+
+    def transitions_pointing_to(self, target_state: DFState):
+        """
+        Return a set of all transitions that point to the target state that are reachable
+        from the start state
+        """
+
+        result = set()
+
+        for state in self.dfs():
+            for t in state.all_transitions():
+                if t.target == target_state:
+                    result.add(t)
+
+        return result
+
+    def transitions_that_do(self, action: "Action"):
+        """
+        Return a set of all transitions that contain the action and that are reachable
+        from the start state
+        """
+
+        result = set()
+
+        for state in self.dfs():
+            for t in state.all_transitions():
+                if action in t.actions:
+                    result.add(t)
+
         return result
 
     def is_valid(self):
@@ -407,22 +447,11 @@ class DFA:
         Can we still reach at least one accept state?
         """
 
-        visited = set() 
-
-        def aux(state):
-            if not state:
-                return False
-            if state in visited:
-                return False
+        for state in self.dfs():
             if state in self.accepting_states:
                 return True
-            visited.add(state)
-            for t in state.all_transitions():
-                if aux(t.target):
-                    return True
-            return False
 
-        return aux(self.starting_state)
+        return False
 
     def append_after(self, chained_dfa: "DFA", sub_states=None, mark_accept=True, chain_actions=None):
         """
