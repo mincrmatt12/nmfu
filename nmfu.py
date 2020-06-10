@@ -768,6 +768,9 @@ class AppendTo(Action, HasDefaultDebugInfo):
     def get_target_override_mode(self):
         return ActionOverrideMode.MAY_GOTO_TARGET
 
+    def get_target_override_target(self):
+        return self.end_target
+
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
             return "append action ({})".format(DebugData.lookup(self.into_storage, DebugTag.NAME))
