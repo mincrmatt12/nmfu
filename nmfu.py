@@ -661,6 +661,9 @@ class IllegalDFAStateError(IllegalASTStateError):
 class IllegalParseTree(IllegalASTStateError):
     pass
 
+class IllegalIntExpr(IllegalASTStateError):
+    pass
+
 class IllegalDFAStateConflictsError(NMFUError):
     """
     Specifically for conflicts as opposed to an invalid state detected on a single thing
@@ -1058,6 +1061,79 @@ class LiteralIntegerExpr(IntegerExpr):
 
     def get_literal_result(self):
         return self.value
+
+class OutIntegerExpr(IntegerExpr):
+    def __init__(self, ref: "OutputStorage"):
+        self.ref = ref
+
+    def result_type(self):
+        return self.ref.type
+
+class LastCharIntegerExpr(IntegerExpr):
+    def result_type(self):
+        return OutputStorageType.INT
+
+    def get_invalid_contexts(self):
+        return [IntegerExprUseContext.ASSIGN_INITIAL]
+
+class MathIntegerExpr(IntegerExpr):
+    def __init__(self, children: List[IntegerExpr]):
+        self.children = children
+
+        if not self.children:
+            raise IllegalParseTree("Empty math expression", self)
+    
+        if not all(x.result_type() == OutputStorageType.INT for x in self.children):
+            raise IllegalParseTree("Invalid arithmetic type", self)
+
+    def result_type(self):
+        return self.children[0].result_type()
+
+    def is_literal(self):
+        return all(x.is_literal() for x in self.children)
+
+    def get_invalid_contexts(self):
+        returned = set()
+
+        for ctx in itertools.chain(*(x.get_invalid_contexts() for x in self.children)):
+            if ctx in returned:
+                continue
+            returned.add(ctx)
+            yield ctx
+
+class SumIntegerExpr(MathIntegerExpr):
+    def __init__(self, children: List[IntegerExpr], negate: List[bool]):
+        super().__init__(children)
+        self.negate = negate
+
+    def get_literal_result(self):
+        total = self.children[0].get_literal_result()
+        for operand, operator in itertools.islice(zip(self.children, self.negate), 1, None):
+            if operator:
+                total -= operand
+            else:
+                total += operand
+
+class MulIntegerExprOp(enum.Enum):
+    MUL = '*'
+    DIV = '/'
+    MOD = '%'
+
+class MulIntegerExpr(MathIntegerExpr):
+    def __init__(self, children: List[IntegerExpr], divide: List[MulIntegerExprOp]):
+        super().__init__(children)
+        self.divide = divide
+
+    def get_literal_result(self):
+        total = self.children[0].get_literal_result()
+        for operand, operator in itertools.islice(zip(self.children, self.divide), 1, None):
+            if operator == MulIntegerExprOp.DIV:
+                total //= operand
+            elif operator == MulIntegerExprOp.MOD:
+                total %= operand
+            else:
+                total *= operand
+
 
 # ==========
 # GENERAL RE 
@@ -2338,6 +2414,31 @@ class ParseCtx:
         elif type_obj.data == "str_type":
             return OutputStorage(OutputStorageType.STR, name, default_value=default_value, str_size=int(type_obj.children[0].value))
 
+    def _parse_math_expr(self, expr: lark.Tree):
+        """
+        Parse a math expr [(something)]
+        """
+
+        if expr.data == "math_num":
+            return LiteralIntegerExpr(int(expr.children[0].value))
+        elif expr.data == "math_var":
+            try:
+                return OutIntegerExpr(self.state_object_spec[expr.children[0].value])
+            except KeyError:
+                raise UndefinedReferenceError("output", expr.children[0])
+        elif expr.data == "builtin_math_var":
+            ref = expr.children[0]
+            if ref.value == "last":
+                return LastCharIntegerExpr()
+            else:
+                raise UndefinedReferenceError("builtin math variable", ref)
+        elif expr.data == "sum_expr":
+            return SumIntegerExpr([self._parse_integer_expr(x) for x in expr.children[::2]], [False, *(x.value == "-" for x in expr.children[1::2])])
+        elif expr.data == "mul_expr":
+            return MulIntegerExpr([self._parse_integer_expr(x) for x in expr.children[::2]], [MulIntegerExprOp.MUL, *(MulIntegerExprOp(x.value) for x in expr.children[1::2])])
+        else:
+            raise IllegalParseTree("Invalid math expression", expr)
+
     def _parse_integer_expr(self, expr: lark.Tree, into_storage: OutputStorage=None) -> IntegerExpr:
         """
         Parse an integer type expr (also has bool/etc.)
@@ -2378,6 +2479,8 @@ class ParseCtx:
                 return LiteralIntegerExpr({"true": 1, "false": 0}[expr.children[0].value], result_type)
             except KeyError as e:
                 raise UndefinedReferenceError("boolean constant", expr.children[0]) from e
+        elif expr.data in ["math_num", "math_var", "builtin_math_var", "sum_expr", "mul_expr"]:
+            return self._parse_math_expr(expr)
         else:
             raise IllegalParseTree("Invalid expression in integer expr", expr)
 
