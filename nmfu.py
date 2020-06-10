@@ -505,8 +505,8 @@ class DebugTag(enum.Enum):
 
 class DebugFlag(enum.Enum):
     VERBOSE_REGEX_CCLASS = 0
-    VERBOSE_NFA_CONV = 1
-    VERBOSE_CASE_MERGE = 2
+    VERBOSE_OPTIMIZE_RESULTS = 1
+    VERBOSE_SIMPLIFY_TM = 2
 
 class HasDefaultDebugInfo:
     def debug_lookup(self, tag: DebugTag):
@@ -2559,9 +2559,32 @@ class DfaCompileCtx:
             if i not in accessible:
                 mod += 1
                 self.dfa.states.remove(i)
-        print("removed {} nonaccessible".format(mod))
+        dprint[DebugFlag.VERBOSE_OPTIMIZE_RESULTS]("removed {} nonaccessible".format(mod))
         return mod
 
+    def _optimize_minimize_dfa(self):
+        # TODO: make this use Hopcroft's algorithm or something similar
+        # 
+        # on hold because the necessary logic for dealing with actions is painful
+        return 0
+
+    def _optimize_simplify_transition_matches(self):
+        """
+        Simplify transitions that match overlapping symbols.
+        e.g.: () ---a, else----> () ==> () ---else----> ()
+        """
+
+        mod = 0
+
+        for state in self.dfa.states:
+            for transition in state.transitions:
+                if len(transition.on_values) > 1 and DFTransition.Else in transition.on_values:
+                    dprint[DebugFlag.VERBOSE_SIMPLIFY_TM]("simplfying {} with Else".format(transition))
+                    transition.on_values = [DFTransition.Else]
+                    mod += 1
+
+        dprint[DebugFlag.VERBOSE_OPTIMIZE_RESULTS]("simplified {} transitions".format(mod))
+        return mod
 
     def compile(self):
         """
@@ -2571,7 +2594,7 @@ class DfaCompileCtx:
         self.dfa = self.ast.convert(defaultdict(lambda: self.generic_fail_state))
         self.dfa.add(self.generic_fail_state)
 
-        while self._optimize_remove_inaccessible():
+        while self._optimize_remove_inaccessible() + self._optimize_simplify_transition_matches():
             pass
 
 # =============
