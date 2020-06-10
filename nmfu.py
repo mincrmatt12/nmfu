@@ -45,6 +45,7 @@ parser_decl: "parser" "{" statement+ "}"
 
 simple_stmt: expr -> match_stmt
            | IDENTIFIER "=" expr -> assign_stmt
+           | IDENTIFIER "+=" expr -> append_stmt
            | IDENTIFIER "(" (expr ("," expr)*)? ")" -> call_stmt
            | "break" IDENTIFIER? -> break_stmt
            | "finish" -> finish_stmt
@@ -782,6 +783,21 @@ class SetTo(Action, HasDefaultDebugInfo):
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
             return "set into {}".format(DebugData.lookup(self.into_storage, DebugTag.NAME))
+
+class SetToStr(Action, HasDefaultDebugInfo):
+    def __init__(self, value_expr: str, into_storage: "OutputStorage"):
+        self.into_storage = into_storage
+        if into_storage.type != OutputStorageType.STR:
+            raise IllegalASTStateError("SetToStr used without a string", self)
+        self.value_expr = value_expr
+
+    def get_mode(self):
+        return ActionMode.AT_FINISH
+
+    def debug_lookup(self, tag: DebugTag):
+        if tag == DebugTag.NAME:
+            return "set into {} {!r}".format(DebugData.lookup(self.into_storage, DebugTag.NAME), self.value_expr)
+
 
 class Node(abc.ABC):
     """
@@ -2386,7 +2402,7 @@ class ParseCtx:
         else:
             raise IllegalParseTree("Invalid expression in match expression context", expr)
 
-    def _parse_assign_stmt(self, stmt: lark.Tree) -> Node:
+    def _parse_assign_stmt(self, stmt: lark.Tree, is_append) -> Node:
         """
         Parse an assignment into its underlying action
         """
@@ -2397,13 +2413,18 @@ class ParseCtx:
             raise UndefinedReferenceError("output", stmt.children[0])
         targeted = self.state_object_spec[targeted]
 
-        if targeted.type == OutputStorageType.STR:
+        if targeted.type == OutputStorageType.STR and is_append:
             # Create an append expression
             # TODO: end expr target (try/except?)
             match_node = MatchNode(self._parse_match_expr(stmt.children[1]))
-            match_node.match.attach(AppendTo(None, targeted))
+            match_node.match.attach(AppendTo(self.exception_handlers[ErrorReasons.OUT_OF_SPACE], targeted))
             return match_node
-        else:
+        elif targeted.type == OutputStorageType.STR:
+            if stmt.children[1].data != "string_const":
+                raise IllegalParseTree("String assignment only supports string constants, did you mean +=?", stmt.children[1])
+            else:
+                return ActionNode(SetToStr(self._convert_string(stmt.children[1].children[0].value), targeted))
+        elif not is_append:
             # TODO: try to check the return type
             return ActionNode(SetTo(self._parse_integer_expr(stmt.children[1], targeted), targeted))
 
