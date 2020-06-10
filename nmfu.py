@@ -2549,6 +2549,21 @@ class ParseCtx:
             next_node = node
         return next_node
 
+class DfaCompileCtx:
+    def __init__(self, parse_ctx: ParseCtx):
+        self.state_object_spec = parse_ctx.state_object_spec
+        self.ast = parse_ctx.ast
+        self.start_actions = parse_ctx.start_actions
+        self.generic_fail_state = DFState()
+
+    def compile(self):
+        """
+        Convert the AST into a (potentially optimized) DFA.
+        """
+
+        self.dfa = self.ast.convert(defaultdict(lambda: self.generic_fail_state))
+        self.dfa.add(self.generic_fail_state)
+
 # =============
 # DEBUG DUMPERS
 # =============
@@ -2580,6 +2595,8 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None):
                 acname = DebugData.lookup(action, DebugTag.NAME, recurse_upwards=False)
                 if acname:
                     label += "\n{}".format(acname)
+                if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.MAY_GOTO_TARGET]:
+                    g.edge(str(id(state)), str(id(action.get_target_override_target())), label=f"{acname} side effect")
             g.edge(str(id(state)), str(id(transition.target)), label=label)
 
     g.render(out_name, format="pdf", cleanup=True)
@@ -2638,11 +2655,17 @@ if __name__ == "__main__":
     DebugData.load_source(contents)
     parse_tree = parser.parse(contents)
 
-    ctx = ParseCtx(parse_tree)
-    ctx.parse()
+    lark.tree.pydot__tree_to_png(parse_tree, "test3.png")
 
-    total = ctx.ast.convert(defaultdict(lambda: None))
-    debug_dump_dfa(total)
+    pctx = ParseCtx(parse_tree)
+    pctx.parse()
+
+    dctx = DfaCompileCtx(pctx)
+    dctx.compile()
+
+    total = dctx.dfa
+
+    debug_dump_dfa(dctx.dfa)
 
     #in_arr = []
     #while hasattr(pos, "match"):
