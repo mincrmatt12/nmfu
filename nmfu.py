@@ -2338,6 +2338,18 @@ class ParseCtx:
             DebugData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
             DebugData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
             return val
+        elif expr.data == "bool_const":
+            if into_storage is None:
+                result_type = OutputStorageType.BOOL
+            else:
+                if into_storage.type not in [OutputStorageType.BOOL, OutputStorageType.INT]:
+                    raise IllegalParseTree("Use of boolean expression in non integral-type", expr)
+                result_type = into_storage.type
+
+            try:
+                return LiteralIntegerExpr({"true": 1, "false": 0}[expr.children[0].value], result_type)
+            except KeyError:
+                raise UndefinedReferenceError("boolean constant", expr.children[0])
         else:
             raise IllegalParseTree("Invalid expression in integer expr", expr)
 
