@@ -126,7 +126,7 @@ STRING: /"(?:[^"\\]|\\.)*"/
 REGEX_UNIMPORTANT: /[^.?*()\[\]\\+{}|\/]|\\\.|\\\*|\\\(|\\\)|\\\[|\\\]|\\\+|\\\\|\\\{|\\\}|\\\||\\\//
 REGEX_OP: /[+*?]/
 REGEX_CHARGROUP_ELEMENT_RAW: /[^\-\]\\\/]|\\-|\\\]|\\\\|\\\//
-REGEX_CHARCLASS: /[wWdDsSntr]/
+REGEX_CHARCLASS: /[wWdDsSntr ]/
 
 // math
 SUM_OP: /[+-]/
@@ -1409,6 +1409,7 @@ class RegexMatch(Match):
             "D": InvertedRegexCharClass(string.digits),
             "s": RegexCharClass(string.whitespace),
             "S": InvertedRegexCharClass(string.whitespace),
+            " ": RegexCharClass(" ")
         }[regex_char_class.children[0].value[0]]
         DebugData.imbue(val, DebugTag.SOURCE_LINE, regex_char_class.children[0].line)
         DebugData.imbue(val, DebugTag.SOURCE_COLUMN, regex_char_class.children[0].column)
