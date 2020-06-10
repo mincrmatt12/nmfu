@@ -339,7 +339,7 @@ class DFA:
     def __init__(self):
         self.accepting_states = []
         self.starting_state = None
-        self.states = []
+        self.states: List[DFState] = []
 
     def add(self, state):
         if DebugData.lookup(state, DebugTag.PARENT) is None:
