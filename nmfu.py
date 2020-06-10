@@ -2258,6 +2258,10 @@ class ParseCtx:
         parser_decl = next(self._parse_tree.find_data("parser_decl"))
         self.ast = self._parse_stmt_seq(parser_decl.children)
 
+        if isinstance(self.ast, ActionNode):
+            self.start_actions = self.ast.actions
+            self.ast = self.ast.get_next()
+
     def _convert_string(self, escaped_string: str):
         """
         Parse the string `escaped_string`, which is the direct token from lark (still with quotes and escapes)
