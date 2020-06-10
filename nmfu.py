@@ -736,11 +736,28 @@ class FinishAction(Action, HasDefaultDebugInfo):
         return True
 
     def get_target_override_mode(self):
-        return ActionOverrideMode.ALWAYS_GOTO_OTHER
+        return ActionOverrideMode.ALWAYS_GOTO_UNDEFINED
 
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
             return "exit action"
+
+class BreakAction(Action, HasDefaultDebugInfo):
+    def __init__(self, refers_to):
+        self.refers_to = refers_to
+
+    def get_mode(self):
+        return ActionMode.AT_FINISH
+
+    def is_timing_strict(self):
+        return True
+
+    def get_target_override_mode(self):
+        return ActionOverrideMode.ALWAYS_GOTO_UNDEFINED
+
+    def debug_lookup(self, tag: DebugTag):
+        if tag == DebugTag.NAME:
+            return "break action for {}".format(DebugData.lookup(self.refers_to, DebugTag.NAME))
 
 class AppendTo(Action, HasDefaultDebugInfo):
     def __init__(self, end_target, into_storage: "OutputStorage"):
@@ -2221,6 +2238,12 @@ class ParseCtx:
         self.macros = {} # all macros, name --> AST
         self.state_object_spec = {}
         self.ast = None
+        self.start_actions = []
+
+        # TODO: store a global "error handler fault state"
+        self.exception_handlers = defaultdict(lambda: None)  # normal ErrorReason -> State
+        self.break_handlers = {}      # "string name" -> Action
+        self.innermost_break_handler = None  # just an Action
     
     def parse(self):
         # Parse state_object_spec
@@ -2408,13 +2431,69 @@ class ParseCtx:
             DebugData.imbue(act, DebugTag.SOURCE_LINE, stmt.line)
             DebugData.imbue(act, DebugTag.SOURCE_COLUMN, stmt.column)
             return ActionNode(act)
-        elif stmt.data == "assign_stmt":
-            return self._parse_assign_stmt(stmt)
+        elif stmt.data == "break_stmt":
+            if stmt.children:
+                target_name = stmt.children[0].value
+                if target_name not in self.break_handlers:
+                    raise UndefinedReferenceError("loop", stmt.children[0])
+                else:
+                    act = self.break_handlers[target_name]
+            else:
+                act = self.innermost_break_handler
+            if act is None:
+                raise IllegalParseTree("Break outside of loop", stmt)
+            DebugData.imbue(act, DebugTag.SOURCE_LINE, stmt.line)
+            DebugData.imbue(act, DebugTag.SOURCE_COLUMN, stmt.column)
+            return ActionNode(act)
+        elif stmt.data in ("assign_stmt", "append_stmt"):
+            return self._parse_assign_stmt(stmt, stmt.data == "append_stmt")
         elif stmt.data == "case_stmt":
             # Find all of the matches
             return CaseNode({k: v for k, v in (self._parse_case_clause(x) for x in stmt.children)})
         elif stmt.data == "optional_stmt":
             return OptionalNode(self._parse_stmt_seq(stmt.children))
+        elif stmt.data == "loop_stmt":
+            loop_name = None
+            statements = stmt.children[:]
+            if len(stmt.children) and isinstance(stmt.children[0], lark.Token) and stmt.children[0].data == "IDENTIFIER":
+                loop_name = stmt.children[0].value
+                statements = stmt.children[1:]
+            loop_node = LoopNode(loop_name)
+            previous_break = self.innermost_break_handler
+            self.break_handlers[loop_name] = loop_node.get_break_handler()
+            self.innermost_break_handler = loop_node.get_break_handler()
+            child_node = self._parse_stmt_seq(statements)
+            self.innermost_break_handler = previous_break
+            loop_node.set_child(child_node)
+            return loop_node
+        elif stmt.data == "try_stmt":
+            catch_block = stmt.children[-1]
+            # try to see if there are options, otherwise use all
+            catch_block_stmts = catch_block.children[:]
+            catch_handles = set(ErrorReasons)
+
+            if catch_block.children and catch_block.children[0].data == "catch_options":
+                catch_handles = set()
+                catch_block_stmts = catch_block.children[1:]
+
+                for option in catch_block.children[0].children:
+                    try:
+                        catch_handles.add(ErrorReasons(option.value))
+                    except ValueError:
+                        raise UndefinedReferenceError("error type", option)
+
+            body_block_stmts = stmt.children[:-1]
+            try_node = TryExceptNode(catch_handles)
+
+            prior_error_reasons = self.exception_handlers.copy()
+            self.exception_handlers.update({x: try_node.get_handler() for x in catch_handles})
+            
+            try_node.set_body(self._parse_stmt_seq(body_block_stmts))
+            try_node.set_handler(self._parse_stmt_seq(catch_block_stmts))
+            
+            self.exception_handlers = prior_error_reasons
+
+            return try_node
         else:
             raise IllegalParseTree("Unknown statement", stmt)
 
