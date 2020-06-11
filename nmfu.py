@@ -2357,8 +2357,9 @@ class ParseCtx:
         self.state_object_spec = {}
         self.ast = None
         self.start_actions = []
+        self.generic_fail_state = DFState()
 
-        self.exception_handlers = defaultdict(lambda: None)  # normal ErrorReason -> State
+        self.exception_handlers = defaultdict(lambda: self.generic_fail_state)  # normal ErrorReason -> State
         self.break_handlers = {}      # "string name" -> Action
         self.innermost_break_handler = None  # just an Action
     
@@ -2684,7 +2685,7 @@ class DfaCompileCtx:
         self.state_object_spec = parse_ctx.state_object_spec
         self.ast = parse_ctx.ast
         self.start_actions = parse_ctx.start_actions
-        self.generic_fail_state = DFState()
+        self.generic_fail_state = parse_ctx.generic_fail_state
         self.dfa = None
 
     def _optimize_remove_inaccessible(self):
