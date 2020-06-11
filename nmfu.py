@@ -15,6 +15,8 @@ import itertools
 import queue
 import io
 import textwrap
+import os
+import sys
 from collections import defaultdict
 from typing import List, Optional, Iterable, Dict, Union, Set
 try:
@@ -344,8 +346,8 @@ class DFA:
         self.states: List[DFState] = []
 
     def add(self, state):
-        if DebugData.lookup(state, DebugTag.PARENT) is None:
-            DebugData.imbue(state, DebugTag.PARENT, self)
+        if ProgramData.lookup(state, DebugTag.PARENT) is None:
+            ProgramData.imbue(state, DebugTag.PARENT, self)
         if self.starting_state == None:
             self.starting_state = state
         self.states.append(state)
@@ -505,21 +507,70 @@ class DebugTag(enum.Enum):
     SOURCE_COLUMN = 2
     PARENT = 3
 
-class DebugFlag(enum.Enum):
+class ProgramFlag(int, enum.Enum):
+    def __new__(cls, value, helpstr="", default=False, implies=(), exclusive_with=()):
+        obj = int.__new__(cls, value)
+        obj.default = default
+        obj.helpstr = helpstr
+        obj._value_ = value
+        obj.implies = frozenset(implies)
+        obj.exclusive_with = frozenset(exclusive_with)
+        return obj
+
+    # Verbosity options (enabled by various levels of -v or, ofc, -f)
     VERBOSE_REGEX_CCLASS = 0
     VERBOSE_OPTIMIZE_RESULTS = 1
     VERBOSE_SIMPLIFY_TM = 2
+
+    # Optimization flags, set in ProgramData
+    # DFA optimization options (enabled by various levels of -O)
+    SIMPLIFY_ELSE_CONDITIONS = 3
+    REMOVE_INACCESIBLE_STATES = 4
+
+    # Codegen optimization options ('')
+    COLLAPSE_TRANSITION_RANGES = 9
+
+    # Codegen options 
+    # |
+    # - Structure options
+    DYNAMIC_MEMORY = 7  # Allow use of dynamic memory
+    # |
+    # - String storage options
+    ALLOCATE_STR_SPACE_IN_STRUCT = (5, "Allocate string space in struct", True, (), (6,))  # allocate the string space in the struct as an array, default
+    ALLOCATE_STR_SPACE_DYNAMIC   = (6, "Allocate string space dynamically", False, (7,), (5,))  # implies DYNAMIC
+    ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND = (8, "Allocate string space on demand", False, (6,))  # implies DYNAMIC
+
+class ProgramOption(enum.Enum):
+    def __init__(self, default, helpstr):
+        self.default = default
+        self.helpstr = helpstr
+
+    # DFA optimization options
+
+    # Codegen options
+    COLLAPSED_RANGE_LENGTH = (4, "Minimum length of range to collapse into range comparison")
 
 class HasDefaultDebugInfo:
     def debug_lookup(self, tag: DebugTag):
         return None
 
-class DebugData:
+class ProgramData:
     _collection = defaultdict(dict)
     _children = defaultdict(list)
     _current_source = []
     _flags = {
-            x: False for x in DebugFlag # todo: make this 0
+            x: x.default for x in ProgramFlag
+    }
+
+    _options = {
+            x: x.default for x in ProgramOption
+    }
+
+    _OPTIMIZE_LEVELS = {
+        0: (),     # -O0 (nothing)
+        1: (ProgramFlag.SIMPLIFY_ELSE_CONDITIONS, ProgramFlag.REMOVE_INACCESIBLE_STATES),       # -O1 (the default)
+        2: (),     #- O2 (adds to 1, 2)
+        3: (),
     }
 
     @classmethod
@@ -537,8 +588,8 @@ class DebugData:
         """
 
         if tag == DebugTag.PARENT:
-            DebugData._children[id(value.__repr__.__self__)].append(obj)
-        DebugData._collection[id(obj)][tag] = value
+            ProgramData._children[id(value.__repr__.__self__)].append(obj)
+        ProgramData._collection[id(obj)][tag] = value
         return obj
 
     @classmethod
@@ -557,9 +608,9 @@ class DebugData:
 
         id_obj = id(obj) if type(obj) is not int else obj
 
-        if tag not in DebugData._collection[id_obj]:
-            if DebugTag.PARENT in DebugData._collection[id_obj] and recurse_upwards:
-                val = cls.lookup(DebugData._collection[id_obj][DebugTag.PARENT], tag)
+        if tag not in ProgramData._collection[id_obj]:
+            if DebugTag.PARENT in ProgramData._collection[id_obj] and recurse_upwards:
+                val = cls.lookup(ProgramData._collection[id_obj][DebugTag.PARENT], tag)
                 if val is not None:
                     return val
             if isinstance(obj, HasDefaultDebugInfo):
@@ -572,7 +623,7 @@ class DebugData:
                     if val is not None:
                         return val
             return None
-        return DebugData._collection[id_obj][tag]
+        return ProgramData._collection[id_obj][tag]
 
     @classmethod
     def get_source_line(cls, line: int):
@@ -581,14 +632,163 @@ class DebugData:
             return None
         else:
             return cls._current_source[line]
+    
+    @classmethod
+    def _is_optimization_flag(cls, flag):
+        for level in range(4):
+            if flag in cls._OPTIMIZE_LEVELS[level]:
+                return level
+        return -1
+
+    @classmethod
+    def _print_help(cls):
+        print("Usage: nmfu [options] input")
+        print("")
+        print("Global Options:")
+        print("  -o<arg>, --output <arg>                    Output name without extension")
+        print("  -O<level>                                  Optimization level (default: 1)")
+        print("  -f<flag>, -fno-<flag>, --flag <flag>=<arg> Enable or disable a flag")
+        print("")
+        print("Generation Options:")
+        pad_length = 4 + len(max(ProgramOption, key=lambda x: len(x.name)).name) + 6
+        for option in ProgramOption:
+            flag_name = option.name.replace("_", "-").lower()
+            opt_str = f"  --{flag_name} <arg>"
+            print(f"{opt_str: <{pad_length}} {option.helpstr} (default: {option.default})")
+        print("")
+        print("Flags:")
+        pad_length = 2 + len(max((y for y in ProgramFlag if not y.name.startswith("VERBOSE") and cls._is_optimization_flag(y) == -1), key=lambda x: len(x.name)).name)
+        for flag in ProgramFlag:
+            if flag.name.startswith("VERBOSE"):
+                continue
+            if cls._is_optimization_flag(flag) >= 0:
+                continue
+            flag_name = flag.name.replace("_", "-").lower()
+            opt_str = f"  {flag_name}"
+            if flag.helpstr:
+                print(f"{opt_str: <{pad_length}} {flag.helpstr} (default: {flag.default})")
+            else:
+                print(opt_str)
+        print("")
+        print("Optimization Flags:")
+        pad_length = 2 + max(len(y.name) for y in ProgramFlag if cls._is_optimization_flag(y) >= 0)
+        for flag in ProgramFlag:
+            if cls._is_optimization_flag(flag) == -1:
+                continue
+            flag_name = flag.name.replace("_", "-").lower()
+            opt_str = f"  {flag_name}"
+            if flag.helpstr:
+                print(f"{opt_str: <{pad_length}} {flag.helpstr} (enabled at level {cls._is_optimization_flag(flag)})")
+            else:
+                print(f"{opt_str: <{pad_length}} enabled at level {cls._is_optimization_flag(flag)}")
+
 
     @classmethod
     def load_commandline_flags(cls, all_cmd_options: List[str]):
-        pass
+        """
+        Load the command line flags passed in. Returns a tuple of (input_filename, program_output_name)
+        """
+
+        input_filename = None
+        program_output_name = None
+
+        optimize_level = 1
+        flag_overrides = {}
+
+        all_cmd_options_iter = iter(all_cmd_options)
+
+        for option in all_cmd_options_iter:
+            if not option:
+                continue
+            try:
+                if option[0] != "-":
+                    if input_filename is not None:
+                        raise RuntimeError("Program filename specified multiple times")
+                    input_filename = option
+                    program_output_name = os.path.splitext(os.path.basename(input_filename))[0]
+                    continue
+                elif option[1] == "-":
+                    option_name = option[2:]
+                    option_value = next(all_cmd_options_iter)
+                else:
+                    option_name = option[1]
+                    option_value = option[2:]
+            except IndexError:
+                raise RuntimeError("Invalid argument " + option)
+            except StopIteration:
+                raise RuntimeError("Missing value for argument " + option)
+
+            if option_name in ["o", "output"]:
+                if "." in option_value:
+                    raise RuntimeError("Program output should not contain an extension")
+                program_output_name = option_value
+            elif option_name == "O":
+                optimize_level = int(option_value)
+            elif option_name in ["f", "flag"]:
+                if option_name == "f":
+                    set_to = True
+                    if option_value.startswith("no-"):
+                        set_to = False
+                        option_value = option_value[3:]
+                    flag_name = option_value.upper().replace("-", "_")
+                else:
+                    if "=" not in option_value:
+                        set_to = True
+                        flag_name = option_value
+                    else:
+                        flag_name, set_to = option_value.split("=")
+                        set_to = set_to in ["yes", "on"]
+                    option_value = flag_name
+                    flag_name = flag_name.upper().replace("-", "_")
+                if flag_name not in ProgramFlag.__members__:
+                    raise RuntimeError("Unknown flag " + option_value)
+                flag_overrides[ProgramFlag[flag_name]] = set_to
+            elif option_name in ["h", "help"]:
+                cls._print_help()
+                exit(0)
+            else:
+                p_option_name = option_name.upper().replace("-", "_")
+                if p_option_name not in ProgramOption.__members__:
+                    raise RuntimeError("Unknown option " + option_name)
+                try:
+                    cls._options[ProgramOption[p_option_name]] = type(ProgramOption[p_option_name].default)(option_value)
+                except ValueError as e:
+                    raise RuntimeError("Invalid value for option " + option_name) from e
+
+        if input_filename is None:
+            raise RuntimeError("No input file provided!")
+
+        for j in range(optimize_level + 1):
+            for i in cls._OPTIMIZE_LEVELS[j]:
+                cls._flags[i] = True
+
+        for k, v in flag_overrides.items():
+            cls._flags[k] = v
+
+        # Set implies
+        for k, v in cls._flags.items():
+            if v:
+                for x in k.implies:
+                    cls._flags[x] = True
+
+        # Check exclusive
+        for k, v in flag_overrides.items():
+            if v:
+                for x in k.exclusive_with:
+                    if flag_overrides.get(ProgramFlag(x), False):
+                        raise RuntimeError("Conflicting flags")
+                    elif cls._flags[ProgramFlag(x)]:
+                        cls._flags[ProgramFlag(x)] = False
+
+        return (input_filename, program_output_name)
 
     @classmethod
     def do(self, flag):
         return self._flags[flag]
+
+    @classmethod
+    def option(self, opt):
+        return self._options[opt]
 
 class IndexableInstance(type):
     def __init__(self, name, bases, dct):
@@ -606,7 +806,7 @@ class dprint(metaclass=IndexableInstance):
         self.condition = condition
 
     def __call__(self, *args, **kwargs):
-        if DebugData.do(self.condition):
+        if ProgramData.do(self.condition):
             print(*args, **kwargs)
 
 
@@ -621,19 +821,19 @@ class NMFUError(Exception):
     def _get_message(self, show_potential_reasons=True, reasons_header="Potential reasons include:"):
         info_strs = []
         for reason in self.reasons:
-            name, line, column = (DebugData.lookup(reason, tag) for tag in (DebugTag.NAME, DebugTag.SOURCE_LINE, DebugTag.SOURCE_COLUMN))
+            name, line, column = (ProgramData.lookup(reason, tag) for tag in (DebugTag.NAME, DebugTag.SOURCE_LINE, DebugTag.SOURCE_COLUMN))
             info_str = ""
             if name:
                 info_str += f"- {name}:"
                 if line is not None:
-                    info_str += f"\n  at line {line}:\n{DebugData.get_source_line(line)}"
+                    info_str += f"\n  at line {line}:\n{ProgramData.get_source_line(line)}"
                     if column is not None:
                         info_str += "\n" + " " * (column - 1) + "^"
                 else:
                     info_str = info_str[-1]
             else:
                 if line is not None:
-                    info_str += f"- line {line}:\n{DebugData.get_source_line(line)}"
+                    info_str += f"- line {line}:\n{ProgramData.get_source_line(line)}"
                     if column is not None:
                         info_str += "\n" + " " * (column - 1) + "^"
                 else:
@@ -767,7 +967,7 @@ class BreakAction(Action, HasDefaultDebugInfo):
 
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
-            return "break action for {}".format(DebugData.lookup(self.refers_to, DebugTag.NAME))
+            return "break action for {}".format(ProgramData.lookup(self.refers_to, DebugTag.NAME))
 
 class AppendTo(Action, HasDefaultDebugInfo):
     def __init__(self, end_target, into_storage: "OutputStorage"):
@@ -782,13 +982,13 @@ class AppendTo(Action, HasDefaultDebugInfo):
 
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
-            return "append action ({})".format(DebugData.lookup(self.into_storage, DebugTag.NAME))
+            return "append action ({})".format(ProgramData.lookup(self.into_storage, DebugTag.NAME))
 
 class SetTo(Action, HasDefaultDebugInfo):
     def __init__(self, value_expr: "IntegerExpr", into_storage: "OutputStorage"):
         self.into_storage = into_storage
         self.value_expr = value_expr
-        DebugData.imbue(value_expr, DebugTag.PARENT, self)
+        ProgramData.imbue(value_expr, DebugTag.PARENT, self)
 
     def get_mode(self):
         return ActionMode.AT_FINISH
@@ -796,9 +996,9 @@ class SetTo(Action, HasDefaultDebugInfo):
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
             if self.value_expr.is_literal():
-                return "set into {} {}".format(DebugData.lookup(self.into_storage, DebugTag.NAME), self.value_expr.get_literal_result())
+                return "set into {} {}".format(ProgramData.lookup(self.into_storage, DebugTag.NAME), self.value_expr.get_literal_result())
             else:
-                return "set into {}".format(DebugData.lookup(self.into_storage, DebugTag.NAME))
+                return "set into {}".format(ProgramData.lookup(self.into_storage, DebugTag.NAME))
 
 class SetToStr(Action, HasDefaultDebugInfo):
     def __init__(self, value_expr: str, into_storage: "OutputStorage"):
@@ -812,7 +1012,7 @@ class SetToStr(Action, HasDefaultDebugInfo):
 
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
-            return "set into {} {!r}".format(DebugData.lookup(self.into_storage, DebugTag.NAME), self.value_expr)
+            return "set into {} {!r}".format(ProgramData.lookup(self.into_storage, DebugTag.NAME), self.value_expr)
 
 
 class Node(abc.ABC):
@@ -910,7 +1110,7 @@ class Match(abc.ABC):
         return None
 
     def attach(self, action: Action):
-        DebugData.imbue(action, DebugTag.PARENT, self)
+        ProgramData.imbue(action, DebugTag.PARENT, self)
         if action.get_mode() == ActionMode.AT_FINISH:
             self.finish_actions.append(action)
         elif action.get_mode() == ActionMode.EACH_CHARACTER:
@@ -930,7 +1130,7 @@ class DirectMatch(Match, HasDefaultDebugInfo):
 
     def convert(self, current_error_handlers: dict):
         sm = DFA() # Create a new SM
-        DebugData.imbue(sm, DebugTag.PARENT, self) # Mark us as the parent of this SM
+        ProgramData.imbue(sm, DebugTag.PARENT, self) # Mark us as the parent of this SM
         state = DFState()
         sm.add(state)
         """
@@ -974,7 +1174,7 @@ class CaseDirectMatch(Match, HasDefaultDebugInfo):
 
     def convert(self, current_error_handlers: dict):
         sm = DFA() # Create a new SM
-        DebugData.imbue(sm, DebugTag.PARENT, self) # Mark us as the parent of this SM
+        ProgramData.imbue(sm, DebugTag.PARENT, self) # Mark us as the parent of this SM
         state = DFState()
         sm.add(state)
         """
@@ -1091,7 +1291,7 @@ class MathIntegerExpr(IntegerExpr):
         self.children = children
         
         for child in self.children:
-            DebugData.imbue(child, DebugTag.PARENT, self)
+            ProgramData.imbue(child, DebugTag.PARENT, self)
 
         if not self.children:
             raise IllegalParseTree("Empty math expression", self)
@@ -1238,25 +1438,25 @@ class InvertedRegexCharClass(RegexCharClass):
 
 class RegexKleene:
     def __init__(self, sub_match):
-        DebugData.imbue(sub_match, DebugTag.PARENT, self)
+        ProgramData.imbue(sub_match, DebugTag.PARENT, self)
         self.sub_match = sub_match
 
 class RegexOptional:
     def __init__(self, sub_match):
-        DebugData.imbue(sub_match, DebugTag.PARENT, self)
+        ProgramData.imbue(sub_match, DebugTag.PARENT, self)
         self.sub_match = sub_match
 
 class RegexAlternation:
     def __init__(self, sub_matches):
         self.sub_matches = set(sub_matches)
         for sub_match in self.sub_matches:
-            DebugData.imbue(sub_match, DebugTag.PARENT, self)
+            ProgramData.imbue(sub_match, DebugTag.PARENT, self)
 
 class RegexSequence:
     def __init__(self, sub_matches):
         self.sub_matches = list(sub_matches)
         for sub_match in self.sub_matches:
-            DebugData.imbue(sub_match, DebugTag.PARENT, self)
+            ProgramData.imbue(sub_match, DebugTag.PARENT, self)
 
 class RegexNFState:
     Epsilon = object()
@@ -1334,7 +1534,7 @@ class RegexNFA:
         if finishing_idx in start_dfa_state:
             target_dfa.mark_finishing(visited_states[start_dfa_state])
         to_process.put(start_dfa_state)
-        DebugData.imbue(visited_states[start_dfa_state], DebugTag.PARENT, self.states[next(iter(start_dfa_state))])
+        ProgramData.imbue(visited_states[start_dfa_state], DebugTag.PARENT, self.states[next(iter(start_dfa_state))])
 
         while not to_process.empty():
             processing = to_process.get()
@@ -1348,7 +1548,7 @@ class RegexNFA:
                     if new_state not in visited_states:
                         # create the new state
                         visited_states[new_state] = RegexNFState()
-                        DebugData.imbue(visited_states[new_state], DebugTag.PARENT, self.states[next(iter(new_state))])
+                        ProgramData.imbue(visited_states[new_state], DebugTag.PARENT, self.states[next(iter(new_state))])
                         # should it be a finishing state?
                         if finishing_idx in new_state:
                             target_dfa.mark_finishing(visited_states[new_state])
@@ -1426,7 +1626,7 @@ class RegexNFA:
             new_state = RegexNFState()
             new_states[subset] = new_state
             new_dfa.add(new_state)
-            DebugData.imbue(new_state, DebugTag.PARENT, state)
+            ProgramData.imbue(new_state, DebugTag.PARENT, state)
 
             if state in self.finishing_states:
                 new_dfa.mark_finishing(new_state)
@@ -1456,7 +1656,7 @@ class RegexMatch(Match):
         # Create the simplified representation
         self.regex_tree = self._interpret_parse_tree(regex_parse_tree)
         self.regex_tree = self._simplify_regex_tree(self.regex_tree)
-        DebugData.imbue(self.regex_tree, DebugTag.PARENT, self)
+        ProgramData.imbue(self.regex_tree, DebugTag.PARENT, self)
 
         # Variables used during construction (similarly to how mlang works, to reduce arguments in recursive methods)
         self.nfa: Optional[RegexNFA] = None
@@ -1468,12 +1668,12 @@ class RegexMatch(Match):
         """
         Convert the regex tree object into the NFA using Thompson construction. Return the finish state
         """
-        DebugData.imbue(r, DebugTag.PARENT, start_state)
+        ProgramData.imbue(r, DebugTag.PARENT, start_state)
 
         if isinstance(r, RegexCharClass):
             # Simply convert to a boring form
             end_state = RegexNFState()
-            DebugData.imbue(end_state, DebugTag.PARENT, start_state)
+            ProgramData.imbue(end_state, DebugTag.PARENT, start_state)
             self.nfa.add(end_state)
             start_state.transition(r, end_state)
             return end_state
@@ -1488,7 +1688,7 @@ class RegexMatch(Match):
             sub_starts = [RegexNFState() for x in r.sub_matches]
             end_state = RegexNFState()
             self.nfa.add(end_state, *sub_starts)
-            DebugData.imbue(end_state, DebugTag.PARENT, start_state)
+            ProgramData.imbue(end_state, DebugTag.PARENT, start_state)
             # Link everything up
             for i, j in zip(sub_starts, r.sub_matches):
                 # Link e from start to sub start
@@ -1506,7 +1706,7 @@ class RegexMatch(Match):
             end_state = RegexNFState()
             sub_start = RegexNFState()
             self.nfa.add(end_state, sub_start)
-            DebugData.imbue(end_state, DebugTag.PARENT, start_state)
+            ProgramData.imbue(end_state, DebugTag.PARENT, start_state)
             start_state.transition(RegexNFState.Epsilon, end_state).transition(RegexNFState.Epsilon, sub_start)
             self._convert_to_nfa(r.sub_match, sub_start).transition(RegexNFState.Epsilon, end_state)
             return end_state
@@ -1522,7 +1722,7 @@ class RegexMatch(Match):
             end_state = RegexNFState()
             sub_start = RegexNFState()
             self.nfa.add(end_state, sub_start)
-            DebugData.imbue(end_state, DebugTag.PARENT, start_state)
+            ProgramData.imbue(end_state, DebugTag.PARENT, start_state)
             start_state.transition(RegexNFState.Epsilon, end_state).transition(RegexNFState.Epsilon, sub_start)
             self._convert_to_nfa(r.sub_match, sub_start).transition(RegexNFState.Epsilon, end_state).transition(RegexNFState.Epsilon, sub_start)
             return end_state
@@ -1558,8 +1758,8 @@ class RegexMatch(Match):
                 val = RegexSequence((sub_match, RegexKleene(sub_match)))
             else:
                 val = {"*": RegexKleene, "?": RegexOptional}[regex_tree.children[1].value](sub_match)
-            DebugData.imbue(val, DebugTag.SOURCE_LINE, regex_tree.children[1].line)
-            DebugData.imbue(val, DebugTag.SOURCE_COLUMN, regex_tree.children[1].column)
+            ProgramData.imbue(val, DebugTag.SOURCE_LINE, regex_tree.children[1].line)
+            ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, regex_tree.children[1].column)
             return val
         else:
             raise NotImplementedError("don't handle {} yet".format(regex_tree.data))
@@ -1569,8 +1769,8 @@ class RegexMatch(Match):
             v = RegexCharClass((regex_tree.value[1],))
         else:
             v = RegexCharClass((regex_tree.value[0],))
-        DebugData.imbue(v, DebugTag.SOURCE_LINE, regex_tree.line)
-        DebugData.imbue(v, DebugTag.SOURCE_COLUMN, regex_tree.column)
+        ProgramData.imbue(v, DebugTag.SOURCE_LINE, regex_tree.line)
+        ProgramData.imbue(v, DebugTag.SOURCE_COLUMN, regex_tree.column)
         return v
 
     def _convert_raw_regex_char_class(self, regex_char_class: lark.Tree):
@@ -1586,8 +1786,8 @@ class RegexMatch(Match):
             "S": InvertedRegexCharClass(string.whitespace),
             " ": RegexCharClass(" ")
         }[regex_char_class.children[0].value[0]]
-        DebugData.imbue(val, DebugTag.SOURCE_LINE, regex_char_class.children[0].line)
-        DebugData.imbue(val, DebugTag.SOURCE_COLUMN, regex_char_class.children[0].column)
+        ProgramData.imbue(val, DebugTag.SOURCE_LINE, regex_char_class.children[0].line)
+        ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, regex_char_class.children[0].column)
         return val
 
     def _visit_all_char_classes(self, regex_tree: lark.Tree):
@@ -1652,21 +1852,21 @@ class RegexMatch(Match):
                 a = total_char_classes[ia]
                 b = total_char_classes[ib]
                 if not a.isdisjoint(b):
-                    dprint[DebugFlag.VERBOSE_REGEX_CCLASS]("splitting", a, "and", b)
+                    dprint[ProgramFlag.VERBOSE_REGEX_CCLASS]("splitting", a, "and", b)
                     keepgoing = True
                     # Split
                     overlap, newa, newb = a.split(b)
-                    dprint[DebugFlag.VERBOSE_REGEX_CCLASS]("into", overlap, newa, newb)
+                    dprint[ProgramFlag.VERBOSE_REGEX_CCLASS]("into", overlap, newa, newb)
                     io = len(total_char_classes)
                     # Add overlap
                     total_char_classes.append(overlap)
                     # Search
                     for k in new_character_classes:
                         if ia in new_character_classes[k]:
-                            dprint[DebugFlag.VERBOSE_REGEX_CCLASS]("adding overlap for a at", k)
+                            dprint[ProgramFlag.VERBOSE_REGEX_CCLASS]("adding overlap for a at", k)
                             new_character_classes[k].append(io)
                         if ib in new_character_classes[k]:
-                            dprint[DebugFlag.VERBOSE_REGEX_CCLASS]("adding overlap for b at", k)
+                            dprint[ProgramFlag.VERBOSE_REGEX_CCLASS]("adding overlap for b at", k)
                             new_character_classes[k].append(io)
                     # Overwrite
                     total_char_classes[ia] = newa
@@ -1688,7 +1888,7 @@ class RegexMatch(Match):
         new_transitions = {frozenset((DFTransition.Else,)): (else_path, False)}
 
         new_state = DFState()
-        DebugData.imbue(new_state, DebugTag.PARENT, nfdfa_state)
+        ProgramData.imbue(new_state, DebugTag.PARENT, nfdfa_state)
         self.out_dfa_cache[id(nfdfa_state)] = new_state
         into.add(new_state)
 
@@ -1756,12 +1956,12 @@ class RegexMatch(Match):
         # Then convert to a DFA
 
         new_dfa = RegexNFA()
-        DebugData.imbue(new_dfa, DebugTag.PARENT, self)
+        ProgramData.imbue(new_dfa, DebugTag.PARENT, self)
         self.dfa_1 = self.nfa.convert_to_dfa(self.alphabet, new_dfa)
         # Minimize the DFA
 
         new_dfa = RegexNFA()
-        DebugData.imbue(new_dfa, DebugTag.PARENT, self)
+        ProgramData.imbue(new_dfa, DebugTag.PARENT, self)
         self.dfa_2 = self.dfa_1.minimize_dfa(self.alphabet, new_dfa)
         
         # Check if it's possible to schedule the finish actions. TODO: instead of throwing an error, attempt to move them to the next thing's start
@@ -1773,12 +1973,12 @@ class RegexMatch(Match):
         # Create a normal SM
         out_dfa = DFA()
         self._create_dfa_state(self.dfa_2.start_state, out_dfa, True, current_error_handlers[ErrorReasons.NO_MATCH])
-        return DebugData.imbue(out_dfa, DebugTag.PARENT, self)
+        return ProgramData.imbue(out_dfa, DebugTag.PARENT, self)
 
 class WaitMatch(Match):
     def __init__(self, sub_match: Match):
         super().__init__()
-        DebugData.imbue(sub_match, DebugTag.PARENT, self)
+        ProgramData.imbue(sub_match, DebugTag.PARENT, self)
         self.match_contents = sub_match
 
     def attach(self, action: Action):
@@ -1799,7 +1999,7 @@ class EndMatch(Match):
          0        1
         """
         sm = DFA()
-        DebugData.imbue(sm, DebugTag.PARENT, self)
+        ProgramData.imbue(sm, DebugTag.PARENT, self)
         start_state = DFState()
         sm.add(start_state)
         ok_state = DFState()
@@ -1814,7 +2014,7 @@ class ConcatMatch(Match):
         super().__init__()
         self.sub_matches = sub_matches
         for i in sub_matches:
-            DebugData.imbue(i, DebugTag.PARENT, self)
+            ProgramData.imbue(i, DebugTag.PARENT, self)
 
     def convert(self, current_error_handlers: dict):
         # distribute actions
@@ -1834,7 +2034,7 @@ class MatchNode(ActionSinkNode):
     """
 
     def __init__(self, match: Match):
-        DebugData.imbue(match, DebugTag.PARENT, self)
+        ProgramData.imbue(match, DebugTag.PARENT, self)
         self.match = match
         self.next = None
 
@@ -1936,7 +2136,7 @@ class CaseNode(Node):
 
         def create_real_state_of(state):
             new_state = DFState()
-            DebugData.imbue(new_state, DebugTag.PARENT, next(iter(state))[1])
+            ProgramData.imbue(new_state, DebugTag.PARENT, next(iter(state))[1])
 
             corresponds_to_finishes_in = set() 
             is_part_of = set()
@@ -2131,7 +2331,7 @@ class CaseNode(Node):
                 refers_to = sub_dfas[original_backreference[i]]
                 decider_dfa.append_after(refers_to, corresponding_finish_states[i], chain_actions=self.case_match_actions[original_backreference[i]])
 
-        DebugData.imbue(decider_dfa, DebugTag.PARENT, self)
+        ProgramData.imbue(decider_dfa, DebugTag.PARENT, self)
 
         # If we need to, add a boring after thing
         if self.next is not None:
@@ -2226,7 +2426,7 @@ class LoopNode(ActionSinkNode, HasDefaultDebugInfo):
 
         # Create the finish state
         end_state = DFState()
-        DebugData.imbue(end_state, DebugTag.PARENT, self)
+        ProgramData.imbue(end_state, DebugTag.PARENT, self)
         sub_dfa.add(end_state)
         # don't mark it accepting yet
 
@@ -2346,8 +2546,8 @@ class Macro:
     def __init__(self, name_token: lark.Token, parse_tree: lark.Tree):
         self.name = name_token.value
         self.parse_tree = parse_tree
-        DebugData.imbue(self, DebugTag.SOURCE_LINE, name_token.line)
-        DebugData.imbue(self, DebugTag.NAME, "macro " + self.name)
+        ProgramData.imbue(self, DebugTag.SOURCE_LINE, name_token.line)
+        ProgramData.imbue(self, DebugTag.NAME, "macro " + self.name)
 
 # =========
 # PARSE CTX
@@ -2446,16 +2646,16 @@ class ParseCtx:
         """
 
         if expr.data == "math_num":
-            return DebugData.imbue(DebugData.imbue(LiteralIntegerExpr(int(expr.children[0].value)), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
+            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(int(expr.children[0].value)), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
         elif expr.data == "math_var":
             try:
-                return DebugData.imbue(DebugData.imbue(OutIntegerExpr(self.state_object_spec[expr.children[0].value]), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
+                return ProgramData.imbue(ProgramData.imbue(OutIntegerExpr(self.state_object_spec[expr.children[0].value]), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
             except KeyError:
                 raise UndefinedReferenceError("output", expr.children[0])
         elif expr.data == "builtin_math_var":
             ref = expr.children[0]
             if ref.value == "last":
-                return DebugData.imbue(DebugData.imbue(LastCharIntegerExpr(), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
+                return ProgramData.imbue(ProgramData.imbue(LastCharIntegerExpr(), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
             else:
                 raise UndefinedReferenceError("builtin math variable", ref)
         elif expr.data == "sum_expr":
@@ -2476,8 +2676,8 @@ class ParseCtx:
 
         if expr.data == "number_const":
             val = LiteralIntegerExpr(int(expr.children[0].value))
-            DebugData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
-            DebugData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
+            ProgramData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
+            ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
             return val
         elif expr.data == "identifier_const":
             if into_storage is None:
@@ -2490,8 +2690,8 @@ class ParseCtx:
                 raise UndefinedReferenceError("enumeration constant", expr)
             
             val = LiteralIntegerExpr(expr.children[0].value, OutputStorageType.ENUM)
-            DebugData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
-            DebugData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
+            ProgramData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
+            ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
             return val
         elif expr.data == "bool_const":
             if into_storage is None:
@@ -2502,7 +2702,7 @@ class ParseCtx:
                 result_type = into_storage.type
 
             try:
-                return DebugData.imbue(DebugData.imbue(LiteralIntegerExpr({"true": 1, "false": 0}[expr.children[0].value], result_type), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
+                return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr({"true": 1, "false": 0}[expr.children[0].value], result_type), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
             except KeyError as e:
                 raise UndefinedReferenceError("boolean constant", expr.children[0]) from e
         elif expr.data in ["math_num", "math_var", "builtin_math_var", "sum_expr", "mul_expr"]:
@@ -2518,21 +2718,21 @@ class ParseCtx:
         if expr.data == "string_const":
             actual_content = expr.children[0]
             match = DirectMatch(self._convert_string(actual_content.value))
-            DebugData.imbue(match, DebugTag.SOURCE_LINE, actual_content.line)
-            DebugData.imbue(match, DebugTag.SOURCE_COLUMN, actual_content.column)
+            ProgramData.imbue(match, DebugTag.SOURCE_LINE, actual_content.line)
+            ProgramData.imbue(match, DebugTag.SOURCE_COLUMN, actual_content.column)
             return match
         elif expr.data == "string_case_const":
             actual_content = expr.children[0]
             match = CaseDirectMatch(self._convert_string(actual_content.value))
-            DebugData.imbue(match, DebugTag.SOURCE_LINE, actual_content.line)
-            DebugData.imbue(match, DebugTag.SOURCE_COLUMN, actual_content.column)
+            ProgramData.imbue(match, DebugTag.SOURCE_LINE, actual_content.line)
+            ProgramData.imbue(match, DebugTag.SOURCE_COLUMN, actual_content.column)
             return match
         elif expr.data == "regex":
             return RegexMatch(expr)
         elif expr.data == "end_expr":
             match = EndMatch()
-            DebugData.imbue(match, DebugTag.SOURCE_LINE, expr.line)
-            DebugData.imbue(match, DebugTag.SOURCE_COLUMN, expr.column)
+            ProgramData.imbue(match, DebugTag.SOURCE_LINE, expr.line)
+            ProgramData.imbue(match, DebugTag.SOURCE_COLUMN, expr.column)
             return match
         elif expr.data == "concat_expr":
             return ConcatMatch(list(self._parse_match_expr(x) for x in expr.children))
@@ -2596,14 +2796,14 @@ class ParseCtx:
         elif stmt.data == "call_stmt":
             try:
                 name = stmt.children[0].value
-                return DebugData.imbue(self._parse_stmt_seq(self.macros[name].parse_tree), DebugTag.PARENT, self.macros[name])
+                return ProgramData.imbue(self._parse_stmt_seq(self.macros[name].parse_tree), DebugTag.PARENT, self.macros[name])
             except KeyError:
                 pass
             raise UndefinedReferenceError("macro", stmt.children[0])
         elif stmt.data == "finish_stmt":
             act = FinishAction()
-            DebugData.imbue(act, DebugTag.SOURCE_LINE, stmt.line)
-            DebugData.imbue(act, DebugTag.SOURCE_COLUMN, stmt.column)
+            ProgramData.imbue(act, DebugTag.SOURCE_LINE, stmt.line)
+            ProgramData.imbue(act, DebugTag.SOURCE_COLUMN, stmt.column)
             return ActionNode(act)
         elif stmt.data == "break_stmt":
             if stmt.children:
@@ -2616,8 +2816,8 @@ class ParseCtx:
                 act = self.innermost_break_handler
             if act is None:
                 raise IllegalParseTree("Break outside of loop", stmt)
-            DebugData.imbue(act, DebugTag.SOURCE_LINE, stmt.line)
-            DebugData.imbue(act, DebugTag.SOURCE_COLUMN, stmt.column)
+            ProgramData.imbue(act, DebugTag.SOURCE_LINE, stmt.line)
+            ProgramData.imbue(act, DebugTag.SOURCE_COLUMN, stmt.column)
             return ActionNode(act)
         elif stmt.data in ("assign_stmt", "append_stmt"):
             return self._parse_assign_stmt(stmt, stmt.data == "append_stmt")
@@ -2692,13 +2892,15 @@ class DfaCompileCtx:
         self.dfa = None
 
     def _optimize_remove_inaccessible(self):
+        if not ProgramData.do(ProgramFlag.REMOVE_INACCESIBLE_STATES):
+            return 0
         accessible = self.dfa.dfs()
         mod = 0
         for i in self.dfa.states.copy():
             if i not in accessible:
                 mod += 1
                 self.dfa.states.remove(i)
-        dprint[DebugFlag.VERBOSE_OPTIMIZE_RESULTS]("removed {} nonaccessible".format(mod))
+        dprint[ProgramFlag.VERBOSE_OPTIMIZE_RESULTS]("removed {} nonaccessible".format(mod))
         return mod
 
     def _optimize_minimize_dfa(self):
@@ -2714,15 +2916,17 @@ class DfaCompileCtx:
         """
 
         mod = 0
+        if not ProgramData.do(ProgramFlag.SIMPLIFY_ELSE_CONDITIONS):
+            return 0
 
         for state in self.dfa.states:
             for transition in state.transitions:
                 if len(transition.on_values) > 1 and DFTransition.Else in transition.on_values:
-                    dprint[DebugFlag.VERBOSE_SIMPLIFY_TM]("simplfying {} with Else".format(transition))
+                    dprint[ProgramFlag.VERBOSE_SIMPLIFY_TM]("simplfying {} with Else".format(transition))
                     transition.on_values = [DFTransition.Else]
                     mod += 1
 
-        dprint[DebugFlag.VERBOSE_OPTIMIZE_RESULTS]("simplified {} transitions".format(mod))
+        dprint[ProgramFlag.VERBOSE_OPTIMIZE_RESULTS]("simplified {} transitions".format(mod))
         return mod
 
     def compile(self):
@@ -2799,6 +3003,8 @@ class CodegenCtx:
 
         result.add(f"{self.program_name}_result_t {self.program_name}_start({self.program_name}_state_t *state);")
         result.add(f"{self.program_name}_result_t {self.program_name}_feed(uint8_t inval, bool is_end, {self.program_name}_state_t *state);")
+        if ProgramData.do(ProgramFlag.DYNAMIC_MEMORY):
+            result.add(f"{self.program_name}_result_t {self.program_name}_free({self.program_name}_state_t *state);")
         result.add("#endif")
 
         return result.value()
@@ -2809,9 +3015,13 @@ class CodegenCtx:
         result.add(f"// source file for nmfu parser {self.program_name}")
         result.add(f"// ============================" + "=" * len(self.program_name))
         result.add(f"#include \"{self.program_name}.h\"")
+        if ProgramData.do(ProgramFlag.DYNAMIC_MEMORY):
+            result.add("#include <stdlib.h>")
         result.add()
         result += self._generate_start_implementation()
         result += self._generate_feed_implementation()
+        if ProgramData.do(ProgramFlag.DYNAMIC_MEMORY):
+            result += self._generate_free_implementation()
         return result.value()
 
     def _integer_containing(self, maxval, signed=True):
@@ -2863,7 +3073,7 @@ class CodegenCtx:
                 contents.add("struct {")
                 with contents as out_contents:
                     for out_decl in self.state_object_spec:
-                        out_contents.add(self._get_state_object_out_type(out_decl), out_decl.name + ";")
+                        out_contents.add(self._get_state_object_out_declaration(out_decl) + ";")
                 contents.add("} c;")
 
             if any(x.type == OutputStorageType.STR for x in self.state_object_spec):
@@ -2877,17 +3087,22 @@ class CodegenCtx:
         result.add(f"typedef struct {self.program_name}_state {self.program_name}_state_t;")
         return result.value()
 
-    def _get_state_object_out_type(self, out_decl: OutputStorage):
+    def _get_state_object_out_declaration(self, out_decl: OutputStorage):
         """
         Get the type of a state object out decl
         """
-
-        return {
-            OutputStorageType.INT: self._integer_containing(None),
-            OutputStorageType.ENUM: f"{self.program_name}_out_{out_decl.name}_t",
-            OutputStorageType.BOOL: "bool",
-            OutputStorageType.STR: "char *"
-        }[out_decl.type]
+        
+        if out_decl.type != OutputStorageType.STR:
+            return {
+                OutputStorageType.INT: self._integer_containing(None),
+                OutputStorageType.ENUM: f"{self.program_name}_out_{out_decl.name}_t",
+                OutputStorageType.BOOL: "bool",
+            }[out_decl.type] + " " + out_decl.name
+        else:
+            if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_IN_STRUCT):
+                return f"char {out_decl.name}[{out_decl.str_size}]"
+            else:
+                return f"char * {out_decl.name}"
 
     def _generate_out_enum(self, out_decl: OutputStorage):
         """
@@ -3003,23 +3218,37 @@ class CodegenCtx:
             # Initialize all state variables
             # First, any (if specified) default values.
             for out_expr in self.state_object_spec:
-                if out_expr.default_value is not None:
-                    contents.add("// initialize default for", out_expr.name)
-                    if out_expr.type == OutputStorageType.STR:
-                        contents.add(self._generate_set_string(out_expr.default_value, out_expr))
-                    else:
-                        contents.add(f"state->c.{out_expr.name} = {self._generate_code_for_int_expr(out_expr.default_value, IntegerExprUseContext.ASSIGN_INITIAL, out_expr)};")
-                # Next, if a string, the counter init value
+                # If a string, first init the counter value
                 if out_expr.type == OutputStorageType.STR:
                     counter_val = 0
                     if out_expr.default_value is not None:
                         counter_val = len(out_expr.default_value)
                     contents.add("// initialize append counter for", out_expr.name)
                     contents.add(f"state->{out_expr.name}_counter = {counter_val};")
+                if out_expr.default_value is not None:
+                    contents.add("// initialize default for", out_expr.name)
+                    if out_expr.type == OutputStorageType.STR:
+                        # Also allocate the data if not included
+                        if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_DYNAMIC):
+                            contents.add(f"state->c.{out_expr.name} = malloc({out_expr.str_size});")
+                        contents.add(self._generate_set_string(out_expr.default_value, out_expr))
+                    else:
+                        contents.add(f"state->c.{out_expr.name} = {self._generate_code_for_int_expr(out_expr.default_value, IntegerExprUseContext.ASSIGN_INITIAL, out_expr)};")
 
             # Set starting state
             contents.add("// set starting state")
             contents.add(f"state->state = {self.dfa.states.index(self.dfa.starting_state)};")
+
+            if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_DYNAMIC):
+                for out_expr in self.state_object_spec:
+                    if out_expr.type != OutputStorageType.STR or out_expr.default_value is not None:
+                        continue # these cases are handled above
+                    if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND):
+                        contents.add(f"// set {out_expr.name} to null")
+                        contents.add(f"state->c.{out_expr.name} = NULL;")
+                    else:
+                        contents.add(f"// allocate space for {out_expr.name}")
+                        contents.add(f"state->c.{out_expr.name} = malloc({out_expr.str_size});")
 
             # Run any start actions
             if self.start_actions:
@@ -3129,6 +3358,22 @@ class CodegenCtx:
         result.add("}")
         return result.value()
 
+    def _generate_free_implementation(self):
+        result = Outputter()
+
+        result.add(f"{self.program_name}_result_t {self.program_name}_free({self.program_name}_state_t *state) {{")
+        
+        with result as contents:
+            # If strings were allocated dynamically, free every string (rationale is that they will be nullptrs)
+            if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_DYNAMIC):
+                for out_expr in self.state_object_spec:
+                    if out_expr.type == OutputStorageType.STR:
+                        contents.add(f"// free storage for {out_expr.name}")
+                        contents.add(f"free(state->c.{out_expr.name});")
+
+        result.add("}")
+        return result.value()
+
 # =============
 # DEBUG DUMPERS
 # =============
@@ -3137,7 +3382,7 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None):
     if not debug_enabled:
         raise RuntimeError("Debugging was disabled! You probably need to install graphviz")
 
-    g = graphviz.Digraph(name='dfa', comment=DebugData.lookup(dfa, DebugTag.NAME))
+    g = graphviz.Digraph(name='dfa', comment=ProgramData.lookup(dfa, DebugTag.NAME))
 
     nodes = []
     edges = []
@@ -3159,7 +3404,7 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None):
             is_real = True
 
             for action in transition.actions:
-                acname = DebugData.lookup(action, DebugTag.NAME, recurse_upwards=False)
+                acname = ProgramData.lookup(action, DebugTag.NAME, recurse_upwards=False)
                 if acname:
                     label += "\n{}".format(acname)
                 if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.MAY_GOTO_TARGET]:
@@ -3175,7 +3420,7 @@ def debug_dump_regexnfa(nfa: RegexNFA, out_name="nfa"):
     if not debug_enabled:
         raise RuntimeError("Debugging was disabled! You probably need to install graphviz")
 
-    g = graphviz.Digraph(name='nfa', comment=DebugData.lookup(nfa, DebugTag.NAME))
+    g = graphviz.Digraph(name='nfa', comment=ProgramData.lookup(nfa, DebugTag.NAME))
 
     nodes = []
     edges = []
@@ -3226,7 +3471,7 @@ def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=Non
         if type(x).__repr__ != object.__repr__:
             base = repr(x)
 
-        name = DebugData.lookup(x, DebugTag.NAME, recurse_upwards=False)
+        name = ProgramData.lookup(x, DebugTag.NAME, recurse_upwards=False)
         if name:
             base += f" ({name})"
 
@@ -3389,44 +3634,26 @@ def debug_dump_regextree(rx, indent=0):
         debug_dump_regextree(rx.sub_match, indent=indent+1)
 
 if __name__ == "__main__":
-    with open("http.nmfu") as f:
+    input_file, program_name = ProgramData.load_commandline_flags(sys.argv[1:])
+
+    with open(input_file) as f:
         contents = f.read()
 
-    DebugData.load_source(contents)
+    ProgramData.load_source(contents)
     parse_tree = parser.parse(contents)
 
     pctx = ParseCtx(parse_tree)
     pctx.parse()
 
-    debug_dump_ast(pctx.ast)
-
-    print("b")
     dctx = DfaCompileCtx(pctx)
     dctx.compile()
 
     total = dctx.dfa
-
-    print("c")
-    #debug_dump_dfa(dctx.dfa)
-
-    cctx = CodegenCtx(dctx, "http")
-    print("header: ")
+    cctx = CodegenCtx(dctx, program_name)
     header = cctx.generate_header()
-    print(header)
-    print("source: ")
     source = cctx.generate_source()
-    print(source)
 
-    with open("http.h", "w") as f:
+    with open(program_name + ".h", "w") as f:
         f.write(header)
-    with open("http.c", "w") as f:
+    with open(program_name + ".c", "w") as f:
         f.write(source)
-
-    #in_arr = []
-    #while hasattr(pos, "match"):
-    #    in_arr.append(pos.match.convert(defaultdict(lambda: None)))
-    #    pos = pos.next
-
-    #g = CaseNode(None)
-    #total, cfs = g._merge(in_arr, None)
-    #debug_dump_dfa(total, 'out')
