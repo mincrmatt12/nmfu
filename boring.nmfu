@@ -1,121 +1,19 @@
-// Comments specified in c++ style because it looks better (fight me)
-
-// Example HTTP parser, which grabs a few headers
-
 out str[32] url;
-out bool accept_gzip = false;
-out bool has_etag = false;
-out str[32] etag;
-out enum{GET,POST} method;
-out enum{OK,BADR,URLL,ETAGL} result = true;
-out int content_size = 0;
 
-// "subroutine"-esque functionality. duplicate states are optimized out.
-//
-// Effectively just substitudes into the ast at the appropriate point.
-macro waitend {
-	wait "\r\n\r\n";
-}
-
-// optional space as in the spec
-macro ows {
-    optional {" ";}
-}
-
-parser { // declare the actual parser
-
-    // Each "statement" here is an instruction to the parser. They are followed sequentially.
-
-    // Try-catch: add custom error handling behavior. If a parse match error occurs, it will jump to the catch statement.
-    try {
-        // Case statement: most simple kind of conditional
-        // Specific match patterns comma separated correspond to actions to be taken.
-        // The special type `else` matches anything not already matched.
-        // `end` already exists as a keyword.
-
-        case {
-            "GET" -> {method = GET;}
-            "POST" -> {method = POST;}
-            // no else here, so invalid methods will fall back to the catch. We _could_ add a seperate case which sets result as an enum here
-        }
-
-        " "; // match a space
-
-        // The more common method of reading "arbitrary" input:
-
-        try {
-            url += /[\/a-zA-Z0-9.\-_?=&+]+/; // Interesting note here, assign statements like this will treat "strings" as just that, literal strings. If you actually want to read _and_ assign, use the explicit "read"
-        }
-        catch (outofspace) {
-            wait "\r\n\r\n";
-            result = URLL;
-            finish;
-        }
-        // Also note that there's an implicit maximum length here. Violating this will trigger an "outofspace" type error (it is possible to provide a comma separated list of exceptions
-        // to handle for a catch).
-            // Explicit length restrictions can be expressed using normal regex syntax.
-
-            " HTTP/1.1\r\n"; // Match the http version and CRLF
-
-        // Now we try and parse headers.
-        // To do this, we utilize a loop.
-        // Loops run forever until encountering a break. To break out of separate loops it is possible to give them names (`loop my_loop` and `break my_loop`.)
-
-        loop {
-            // The context here is immediately after a CRLF, so getting another one would indicate the end of the request / beginning of the body.
-            case {
-                "\r\n" -> {break;} // end the request header parse loop;
-                "If-None-Match:" -> {
-                    ows();
-                    // store an etag
-
-                    has_etag = true;
-                    etag += /([wW]\/)?"([^"]*)"/; // note is is possible to write a regex as /<re>/[<group number>] to only select a specific group.
-
-                        optional { // optional segment, if match error occurs _AT THE BEGINNING_ it will ignore and try the next instruction.
-                            // if a match error occurs _DURING_ parsing of this block, a catch is generated _UNLESS_ it is still possible to parse the next statement.
-                            /(,\ ?([wW]\/)?"[^"]*")+/; // match extra etags, we only want the first one.
-                        }
-
-                    "\r\n";
-                }
-                "Accept-Encoding:" -> {
-                    // try and find "gzip" in a comma separated list
-                    loop {
-                        case {
-                            "gzip" -> {accept_gzip = true;}
-                            "\r\n" -> {break;}
-                            else -> {}
-                        }
-                    }
-                }
-                "Content-Length:" -> {
-                    ows();
-                    loop {
-                        case {
-                            "\r\n" -> {break;}
-                            /\d/ -> {
-                                // special variable: $last: last input, as integer (codepoint/raw value). Guaranteed in this case to be /d
-                                // TODO: should th
-                                content_size = 10; // math
-                            }
-                        }
-                    }
-                }
-                else -> {
-                    // Wait for a newline.
-                    // The wait command "eats" input values until the target value is found, eating it as well.
-                    wait "\r\n";
-                }
-            }
-        }
-
-        // Body parsing is left to the end user.
-        result = OK;
+parser {
+loop {
+    case {
+        "GET" -> {url = ""; "GET";}
+        "POST" -> {"POST";}
     }
-    catch {
-        waitend();
-        result = BADR;
-        finish; // Finish parsing (returns status code "DONE" from the parser function)
-    }
+	
+	url = "oof";
+	url += "test";
+
+	optional {
+		"Hi";
+	}
+
+	"Ooof";
+}
 }
