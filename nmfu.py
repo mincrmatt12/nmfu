@@ -2042,6 +2042,8 @@ class CaseNode(Node):
 
     def set_next(self, next_node):
         if isinstance(next_node, ActionNode):
+            our_next_node = next_node.get_next()
+            next_node.set_next(None)
             for sub_ast in self.sub_matches.values():
                 # Go to end of sub_ast
                 while sub_ast.get_next() is not None:
@@ -2051,6 +2053,7 @@ class CaseNode(Node):
                 sub_ast.set_next(next_node)
             for empty_match in self.empty_matches:
                 self.case_match_actions[empty_match].extend(next_node.actions)
+            self.next = our_next_node
         else:
             self.next = next_node
 
