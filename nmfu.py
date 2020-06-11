@@ -2787,14 +2787,14 @@ class CodegenCtx:
         result += self._generate_state_object_decl()
 
         result.add()
-        result.add(f"enum {self.program_name}_result_e {{")
+        result.add(f"enum {self.program_name}_result {{")
         with result as enum_content:
             enum_content.add(f"{self.program_name.upper()}_OK,")
             enum_content.add(f"{self.program_name.upper()}_FAIL,")
             enum_content.add(f"{self.program_name.upper()}_DONE,")
             # todo: allow custom
         result.add("};")
-        result.add(f"typedef enum {self.program_name}_result_e {self.program_name}_result_t;")
+        result.add(f"typedef enum {self.program_name}_result {self.program_name}_result_t;")
         result.add()
 
         result.add(f"{self.program_name}_result_t {self.program_name}_start({self.program_name}_state_t *state);")
@@ -2896,14 +2896,14 @@ class CodegenCtx:
 
         result = Outputter()
         result.add("// enum for output {}".format(out_decl.name))
-        result.add(f"enum {self.program_name}_out_{out_decl.name}_e {{")
+        result.add(f"enum {self.program_name}_out_{out_decl.name} {{")
         
         with result as contents:
             for val in out_decl.enum_values:
                 contents.add(f"{self.program_name.upper()}_{out_decl.name.upper()}_{val},")
 
         result.add("};")
-        result.add(f"typedef enum {self.program_name}_out_{out_decl.name}_e {self.program_name}_out_{out_decl.name}_t;")
+        result.add(f"typedef enum {self.program_name}_out_{out_decl.name} {self.program_name}_out_{out_decl.name}_t;")
         return result.value()
 
     def _convert_literal_value(self, literal, out_expr: OutputStorage):
