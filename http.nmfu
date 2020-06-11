@@ -7,14 +7,14 @@ out bool accept_gzip = false;
 out bool has_etag = false;
 out str[32] etag;
 out enum{GET,POST} method;
-out bool result = true;
+out enum{OK,BADR,URLL,ETAGL} result;
 out int content_size = 0;
 
 // "subroutine"-esque functionality. duplicate states are optimized out.
 //
 // Effectively just substitudes into the ast at the appropriate point.
 macro waitend {
-	wait "\r\n\r\n";
+    wait "\r\n\r\n";
 }
 
 // optional space as in the spec
@@ -43,12 +43,19 @@ parser { // declare the actual parser
 
         // The more common method of reading "arbitrary" input:
 
-        url += /[\/a-zA-Z0-9.\-_?=&+]+/; // Interesting note here, assign statements like this will treat "strings" as just that, literal strings. If you actually want to read _and_ assign, use the explicit "read"
+        try {
+            url += /[\/a-zA-Z0-9.\-_?=&+]+/; // Interesting note here, assign statements like this will treat "strings" as just that, literal strings. If you actually want to read _and_ assign, use the explicit "read"
+        }
+        catch (outofspace) {
+            waitend();
+            result = URLL;
+            finish;
+        }
         // Also note that there's an implicit maximum length here. Violating this will trigger an "outofspace" type error (it is possible to provide a comma separated list of exceptions
         // to handle for a catch).
-            // Explicit length restrictions can be expressed using normal regex syntax.
+        // Explicit length restrictions can be expressed using normal regex syntax.
 
-            " HTTP/1.1\r\n"; // Match the http version and CRLF
+        " HTTP/1.1\r\n"; // Match the http version and CRLF
 
         // Now we try and parse headers.
         // To do this, we utilize a loop.
@@ -58,21 +65,28 @@ parser { // declare the actual parser
             // The context here is immediately after a CRLF, so getting another one would indicate the end of the request / beginning of the body.
             case {
                 "\r\n" -> {break;} // end the request header parse loop;
-                "If-None-Match:" -> {
+                "If-None-Match:"i -> {
                     ows();
                     // store an etag
 
                     has_etag = true;
-                    etag += /([wW]\/)?"([^"]*)"/; // note is is possible to write a regex as /<re>/[<group number>] to only select a specific group.
+                    try {
+                        etag += /([wW]\/)?"([^"]*)"/; // note is is possible to write a regex as /<re>/[<group number>] to only select a specific group.
+                    }
+                    catch (outofspace) {
+                        waitend();
+                        result = ETAGL;
+                        finish;
+                    }
 
-                        optional { // optional segment, if match error occurs _AT THE BEGINNING_ it will ignore and try the next instruction.
-                            // if a match error occurs _DURING_ parsing of this block, a catch is generated _UNLESS_ it is still possible to parse the next statement.
-                            /(,\ ?([wW]\/)?"[^"]*)+"/; // match extra etags, we only want the first one.
-                        }
+                    optional { // optional segment, if match error occurs _AT THE BEGINNING_ it will ignore and try the next instruction.
+                        // if a match error occurs _DURING_ parsing of this block, a catch is generated _UNLESS_ it is still possible to parse the next statement.
+                        /(,\ ?([wW]\/)?"[^"]*")+/; // match extra etags, we only want the first one.
+                    }
 
                     "\r\n";
                 }
-                "Accept-Encoding:" -> {
+                "Accept-Encoding:"i -> {
                     // try and find "gzip" in a comma separated list
                     loop {
                         case {
@@ -82,7 +96,7 @@ parser { // declare the actual parser
                         }
                     }
                 }
-                "Content-Length:" -> {
+                "Content-Length:"i -> {
                     ows();
                     loop {
                         case {
@@ -104,10 +118,11 @@ parser { // declare the actual parser
         }
 
         // Body parsing is left to the end user.
+        result = OK;
     }
     catch {
         waitend();
-        result = false;
+        result = BADR;
         finish; // Finish parsing (returns status code "DONE" from the parser function)
     }
 }
