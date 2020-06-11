@@ -2816,18 +2816,28 @@ class CodegenCtx:
 
     def _integer_containing(self, maxval, signed=True):
         # TODO: customization point for non 32-bit machines
-        if not signed:
-            return "u" + self._integer_containing(maxval, signed=True)
-        if maxval is None:
-            return "int32_t"
-        elif maxval < 256:
-            return "int8_t"
-        elif maxval < 65536:
-            return "int16_t"
-        elif maxval < (1 << 32):
-            return "int32_t"
+        if signed:
+            if maxval is None:
+                return "int32_t"
+            elif maxval < 128:
+                return "int8_t"
+            elif maxval < 32768:
+                return "int16_t"
+            elif maxval < (1 << 31):
+                return "int32_t"
+            else:
+                return "intmax_t"
         else:
-            return "intmax_t"
+            if maxval is None:
+                return "uint32_t"
+            elif maxval < 256:
+                return "uint8_t"
+            elif maxval < 65536:
+                return "uint16_t"
+            elif maxval < (1 << 32):
+                return "uint32_t"
+            else:
+                return "uintmax_t"
 
     def _generate_state_object_decl(self):
         """
@@ -2861,7 +2871,7 @@ class CodegenCtx:
                 for out_str in (x for x in self.state_object_spec if x.type == OutputStorageType.STR):
                     contents.add(self._integer_containing(out_str.str_size, signed=False), f"{out_str.name}_counter;")
 
-            contents.add(self._integer_containing(len(self.dfa.states)), "state;")
+            contents.add(self._integer_containing(len(self.dfa.states), signed=False), "state;")
 
         result.add("};")
         result.add(f"typedef struct {self.program_name}_state {self.program_name}_state_t;")
