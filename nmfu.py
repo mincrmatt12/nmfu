@@ -2629,7 +2629,7 @@ class ParseCtx:
         elif stmt.data == "loop_stmt":
             loop_name = None
             statements = stmt.children[:]
-            if len(stmt.children) and isinstance(stmt.children[0], lark.Token) and stmt.children[0].data == "IDENTIFIER":
+            if len(stmt.children) and isinstance(stmt.children[0], lark.Token) and stmt.children[0].type == "IDENTIFIER":
                 loop_name = stmt.children[0].value
                 statements = stmt.children[1:]
             loop_node = LoopNode(loop_name)
