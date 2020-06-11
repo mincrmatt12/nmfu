@@ -13,6 +13,8 @@ import enum
 import string
 import itertools
 import queue
+import io
+import textwrap
 from collections import defaultdict
 from typing import List, Optional, Iterable, Dict, Union, Set
 try:
@@ -706,7 +708,11 @@ class ErrorReasons(enum.Enum):
     NO_MATCH = "nomatch"
     OUT_OF_SPACE = "outofspace"
 
-class Action():
+# =======
+# ACTIONS
+# =======
+
+class Action:
     """
     Represents a high-level action to take either upon:
         - matching a character
@@ -782,6 +788,7 @@ class SetTo(Action, HasDefaultDebugInfo):
     def __init__(self, value_expr: "IntegerExpr", into_storage: "OutputStorage"):
         self.into_storage = into_storage
         self.value_expr = value_expr
+        DebugData.imbue(value_expr, DebugTag.PARENT, self)
 
     def get_mode(self):
         return ActionMode.AT_FINISH
@@ -1013,6 +1020,9 @@ class OutputStorage(HasDefaultDebugInfo):
         if tag == DebugTag.NAME:
             return f"output '{self.name}'"
 
+    def __repr__(self):
+        return f"<OutputStorage name={self.name} type={self.type}>"
+
 # ==================
 # INTEGER EXPR TYPES
 # ==================
@@ -1079,6 +1089,9 @@ class LastCharIntegerExpr(IntegerExpr):
 class MathIntegerExpr(IntegerExpr):
     def __init__(self, children: List[IntegerExpr]):
         self.children = children
+        
+        for child in self.children:
+            DebugData.imbue(child, DebugTag.PARENT, self)
 
         if not self.children:
             raise IllegalParseTree("Empty math expression", self)
@@ -2402,9 +2415,14 @@ class ParseCtx:
         type_obj = decl.children[0]
         name = decl.children[1].value
         if len(decl.children) == 3:
-            default_value = self._parse_integer_expr(decl.children[2])
-            if not default_value.is_literal():
-                raise IllegalParseTree("Default value for out-decl must be constant", decl.children[2])
+            if type_obj.data != "str_type":
+                default_value = self._parse_integer_expr(decl.children[2])
+                if not default_value.is_literal():
+                    raise IllegalParseTree("Default value for out-decl must be constant", decl.children[2])
+            else:
+                if decl.children[2].data != "string_const":
+                    raise IllegalParseTree("Default value for string must be a string constant", decl.children[2])
+                default_value = self._convert_string(decl.children[2].children[0].value)
         else:
             default_value = None
 
@@ -2424,16 +2442,16 @@ class ParseCtx:
         """
 
         if expr.data == "math_num":
-            return LiteralIntegerExpr(int(expr.children[0].value))
+            return DebugData.imbue(DebugData.imbue(LiteralIntegerExpr(int(expr.children[0].value)), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
         elif expr.data == "math_var":
             try:
-                return OutIntegerExpr(self.state_object_spec[expr.children[0].value])
+                return DebugData.imbue(DebugData.imbue(OutIntegerExpr(self.state_object_spec[expr.children[0].value]), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
             except KeyError:
                 raise UndefinedReferenceError("output", expr.children[0])
         elif expr.data == "builtin_math_var":
             ref = expr.children[0]
             if ref.value == "last":
-                return LastCharIntegerExpr()
+                return DebugData.imbue(DebugData.imbue(LastCharIntegerExpr(), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
             else:
                 raise UndefinedReferenceError("builtin math variable", ref)
         elif expr.data == "sum_expr":
@@ -2480,7 +2498,7 @@ class ParseCtx:
                 result_type = into_storage.type
 
             try:
-                return LiteralIntegerExpr({"true": 1, "false": 0}[expr.children[0].value], result_type)
+                return DebugData.imbue(DebugData.imbue(LiteralIntegerExpr({"true": 1, "false": 0}[expr.children[0].value], result_type), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
             except KeyError as e:
                 raise UndefinedReferenceError("boolean constant", expr.children[0]) from e
         elif expr.data in ["math_num", "math_var", "builtin_math_var", "sum_expr", "mul_expr"]:
@@ -2714,6 +2732,389 @@ class DfaCompileCtx:
         while self._optimize_remove_inaccessible() + self._optimize_simplify_transition_matches():
             pass
 
+class Outputter:
+    SHIFT_WIDTH = 4
+
+    def __init__(self, indent=0, target=None):
+        if target:
+            self.result = target
+        else:
+            self.result = io.StringIO()
+        self.indent = indent
+
+    def __enter__(self):
+        return Outputter(self.indent + Outputter.SHIFT_WIDTH, self.result)
+
+    def __exit__(self, *args, **kwargs):
+        pass
+
+    def add(self, *args, **kwargs):
+        self.result.write(" " * self.indent)
+        print(*args, **kwargs, file=self.result)
+
+    def value(self):
+        return self.result.getvalue()
+
+    def __iadd__(self, tgt):
+        self.result.write(textwrap.indent(tgt, " "*self.indent))
+        return self
+
+class CodegenCtx:
+    def __init__(self, dfa_compile_ctx: DfaCompileCtx, program_name: str):
+        self.start_actions = dfa_compile_ctx.start_actions
+        self.dfa = dfa_compile_ctx.dfa
+        self.state_object_spec: List[OutputStorage] = list(dfa_compile_ctx.state_object_spec.values())
+        self.generic_fail_state = dfa_compile_ctx.generic_fail_state
+        self.program_name = program_name
+
+    def generate_header(self):
+        result = Outputter()
+        # todo: allow user to use pragma once
+        result.add(f"#ifndef {self.program_name.upper()}_H")
+        result.add(f"#define {self.program_name.upper()}_H")
+        result.add("#include <stdbool.h>")
+        result.add("#include <stdint.h>")
+        result.add()
+        result.add(f"// ============================" + "=" * len(self.program_name))
+        result.add(f"// header file for nmfu parser {self.program_name}")
+        result.add(f"// ============================" + "=" * len(self.program_name))
+        result.add()
+
+        result += self._generate_state_object_decl()
+
+        result.add()
+        result.add(f"enum {self.program_name}_result_e {{")
+        with result as enum_content:
+            enum_content.add(f"{self.program_name.upper()}_OK,")
+            enum_content.add(f"{self.program_name.upper()}_FAIL,")
+            enum_content.add(f"{self.program_name.upper()}_DONE,")
+            # todo: allow custom
+        result.add("};")
+        result.add(f"typedef enum {self.program_name}_result_e {self.program_name}_result_t;")
+        result.add()
+
+        result.add(f"{self.program_name}_result_t {self.program_name}_start({self.program_name}_state_t *state);")
+        result.add(f"{self.program_name}_result_t {self.program_name}_feed(uint8_t inval, bool is_end, {self.program_name}_state_t *state);")
+        result.add("#endif")
+
+        return result.value()
+
+    def generate_source(self):
+        result = Outputter()
+        result.add(f"// ============================" + "=" * len(self.program_name))
+        result.add(f"// source file for nmfu parser {self.program_name}")
+        result.add(f"// ============================" + "=" * len(self.program_name))
+        result.add(f"#include \"{self.program_name}.h\"")
+        result.add()
+        result += self._generate_start_implementation()
+        result += self._generate_feed_implementation()
+        return result.value()
+
+    def _integer_containing(self, maxval, signed=True):
+        # TODO: customization point for non 32-bit machines
+        if not signed:
+            return "u" + self._integer_containing(maxval, signed=True)
+        if maxval is None:
+            return "int32_t"
+        elif maxval < 256:
+            return "int8_t"
+        elif maxval < 65536:
+            return "int16_t"
+        elif maxval < (1 << 32):
+            return "int32_t"
+        else:
+            return "intmax_t"
+
+    def _generate_state_object_decl(self):
+        """
+        Generate the ```
+        struct program_name_state {
+            
+        };
+        ```
+        object, along with any enums.
+        """
+
+        result = Outputter()
+        
+        for out_decl in self.state_object_spec:
+            if out_decl.type == OutputStorageType.ENUM:
+                result += self._generate_out_enum(out_decl)
+                result.add()
+
+        result.add("// state object")
+        result.add(f"struct {self.program_name}_state", "{")
+        with result as contents:
+            if self.state_object_spec:
+                contents.add("struct {")
+                with contents as out_contents:
+                    for out_decl in self.state_object_spec:
+                        out_contents.add(self._get_state_object_out_type(out_decl), out_decl.name + ";")
+                contents.add("} c;")
+
+            if any(x.type == OutputStorageType.STR for x in self.state_object_spec):
+                # TODO: maximum size checking / even necessary size checking?
+                for out_str in (x for x in self.state_object_spec if x.type == OutputStorageType.STR):
+                    contents.add(self._integer_containing(out_str.str_size, signed=False), f"{out_str.name}_counter;")
+
+            contents.add(self._integer_containing(len(self.dfa.states)), "state;")
+
+        result.add("};")
+        result.add(f"typedef struct {self.program_name}_state {self.program_name}_state_t;")
+        return result.value()
+
+    def _get_state_object_out_type(self, out_decl: OutputStorage):
+        """
+        Get the type of a state object out decl
+        """
+
+        return {
+            OutputStorageType.INT: self._integer_containing(None),
+            OutputStorageType.ENUM: f"{self.program_name}_out_{out_decl.name}_t",
+            OutputStorageType.BOOL: "bool",
+            OutputStorageType.STR: "char *"
+        }[out_decl.type]
+
+    def _generate_out_enum(self, out_decl: OutputStorage):
+        """
+        Generate an output enum type
+        """
+
+        result = Outputter()
+        result.add("// enum for output {}".format(out_decl.name))
+        result.add(f"enum {self.program_name}_out_{out_decl.name}_e {{")
+        
+        with result as contents:
+            for val in out_decl.enum_values:
+                contents.add(f"{self.program_name.upper()}_{out_decl.name.upper()}_{val},")
+
+        result.add("};")
+        result.add(f"typedef enum {self.program_name}_out_{out_decl.name}_e {self.program_name}_out_{out_decl.name}_t;")
+        return result.value()
+
+    def _convert_literal_value(self, literal, out_expr: OutputStorage):
+        if out_expr.type == OutputStorageType.ENUM:
+            return f"{self.program_name.upper()}_{out_expr.name.upper()}_{literal.upper()}"
+        elif out_expr.type == OutputStorageType.BOOL:
+            return "true" if literal else "false"
+        elif out_expr.type == OutputStorageType.INT:
+            return str(literal)
+        else:
+            return '"{}"'.format(self._escape_string(literal))
+
+    def _generate_code_for_int_expr(self, intexpr: IntegerExpr, ctx: IntegerExprUseContext, out_expr: OutputStorage):
+        """
+        Generate C expression that evaluates to the value of intexpr, used in context ctx and which will fill out_expr (or have its type)
+        """
+
+        if any(x == ctx for x in intexpr.get_invalid_contexts()):
+            raise IllegalIntExpr("Illegal use of integer expression in context {}".format(ctx.name), intexpr)
+
+        if intexpr.result_type() != out_expr.type:
+            print(out_expr, intexpr)
+            raise IllegalIntExpr("Mismatched types for target storage", intexpr)
+
+        if isinstance(intexpr, LiteralIntegerExpr):
+            return self._convert_literal_value(intexpr.get_literal_result(), out_expr)
+        elif isinstance(intexpr, OutIntegerExpr):
+            return f"state->c.{out_expr.name}"
+        elif isinstance(intexpr, LastCharIntegerExpr):
+            return f"({self._integer_containing(None)})(inval)" # name of the last character value
+        elif isinstance(intexpr, SumIntegerExpr):
+            result = f"({self._generate_code_for_int_expr(intexpr.children[0], ctx, out_expr)})"
+            for child, operator in zip(intexpr.children[1:], intexpr.negate[1:]):
+                result += " "
+                result += "-" if operator else "+"
+                result += " "
+                result += f"({self._generate_code_for_int_expr(child, ctx, out_expr)})"
+            return result
+        elif isinstance(intexpr, MulIntegerExpr):
+            result = f"({self._generate_code_for_int_expr(intexpr.children[0], ctx, out_expr)})"
+            for child, operator in zip(intexpr.children[1:], intexpr.divide[1:]):
+                result += " "
+                result += operator.value
+                result += " "
+                result += f"({self._generate_code_for_int_expr(child, ctx, out_expr)})"
+            return result
+        else:
+            raise NotImplementedError("unsupported intexpr type")
+
+    def _escape_string(self, value: str):
+        result = ""
+        bytes_value = value.encode('utf-8')
+        for i in bytes_value:
+            if chr(i) in ["\\", '"']:
+                result += "\\" + i
+            elif not (32 <= i < 127):
+                result += "\\x{:02x}".format(i)
+            else:
+                result += chr(i)
+        return result
+
+    def _generate_set_string(self, value: str, into: OutputStorage):
+        """
+        Generate code that sets value into into
+
+        : strncpy(state->c.into, "value", into.str_size)
+        """
+
+        return f"strncpy(state->c.{into.name}, \"{self._escape_string(value)}\", {into.str_size});"
+
+    def _generate_action_implementation(self, action: Action, is_start: bool = False):
+        result = Outputter()
+        if isinstance(action, FinishAction):
+            result.add(f"return {self.program_name.upper()}_DONE;")
+        elif isinstance(action, SetTo):
+            target = action.into_storage
+            value = self._generate_code_for_int_expr(action.value_expr, IntegerExprUseContext.ASSIGN_INITIAL if is_start else IntegerExprUseContext.ASSIGN_ON_MATCH, target)
+            result.add(f"state->c.{target.name} = {value};")
+        elif isinstance(action, SetToStr):
+            result.add(self._generate_set_string(action.value_expr, action.into_storage))
+            result.add(f"state->{action.into_storage.name}_counter = {len(action.value_expr)};")
+        elif isinstance(action, AppendTo):
+            result.add(f"if (state->{action.into_storage.name}_counter == {action.into_storage.str_size}) state->state = {self.dfa.states.index(action.end_target)};")
+            result.add("else {")
+            with result as body:
+                body.add(f"state->c.{action.into_storage.name}[state->{action.into_storage.name}_counter++] = inval;")
+                body.add(f"state->c.{action.into_storage.name}[state->{action.into_storage.name}_counter] = 0;")
+            result.add("}")
+        return result.value()
+
+    def _generate_start_implementation(self):
+        result = Outputter()
+
+        result.add(f"{self.program_name}_result_t {self.program_name}_start({self.program_name}_state_t *state)", "{")
+
+        with result as contents:
+            # Initialize all state variables
+            # First, any (if specified) default values.
+            for out_expr in self.state_object_spec:
+                if out_expr.default_value is not None:
+                    contents.add("// initialize default for", out_expr.name)
+                    if out_expr.type == OutputStorageType.STR:
+                        contents.add(self._generate_set_string(out_expr.default_value, out_expr))
+                    else:
+                        contents.add(f"state->c.{out_expr.name} = {self._generate_code_for_int_expr(out_expr.default_value, IntegerExprUseContext.ASSIGN_INITIAL, out_expr)};")
+                # Next, if a string, the counter init value
+                if out_expr.type == OutputStorageType.STR:
+                    counter_val = 0
+                    if out_expr.default_value is not None:
+                        counter_val = len(out_expr.default_value)
+                    contents.add("// initialize append counter for", out_expr.name)
+                    contents.add(f"state->{out_expr.name}_counter = {counter_val};")
+
+            # Set starting state
+            contents.add("// set starting state")
+            contents.add(f"state->state = {self.dfa.states.index(self.dfa.starting_state)};")
+
+            # Run any start actions
+            if self.start_actions:
+                contents.add("// run start actions")
+            for action in self.start_actions:
+                contents += self._generate_action_implementation(action, True)
+        
+            contents.add(f"return {self.program_name.upper()}_OK;")
+        result.add("}")
+        return result.value()
+
+    def _generate_equal_check(self, on_value):
+        if on_value == DFTransition.End:
+            return "is_end"
+        else:
+            return f"inval == {ord(on_value)} /* {on_value!r} */"
+
+    def _generate_condition_for_transition(self, transition: DFTransition):
+        # TODO: plenty of optimizations here, right now just do an equal for each of them
+        result = " || ".join(self._generate_equal_check(x) for x in transition.on_values)
+        if DFTransition.End not in transition.on_values:
+            result = f"({result}) && !is_end"
+        return result
+
+    def _generate_condition_for_transition_condition(self, trans_condition):
+        return "false"
+
+    def _generate_transition_body(self, transition: DFTransition):
+        transition_body = Outputter()
+        # Set the next state
+        try:
+            transition_body.add(f"state->state = {self.dfa.states.index(transition.target)};")
+        except ValueError:
+            transition_body.add("// terminating state")
+        # Generate actions
+        for action in transition.actions:
+            transition_body.add()
+            transition_body.add(f"// action {action!r} ")
+            transition_body += self._generate_action_implementation(action)
+        return transition_body.value()
+
+    def _generate_switch_body(self, state: DFState):
+        result = Outputter()
+
+        # Split transitions into else groups
+        else_transitions = list(x for x in state.transitions if DFTransition.Else in x.on_values and x.conditions)
+        try:
+            actual_else_transition = next(state.all_transitions_for((DFTransition.Else,)))
+        except StopIteration:
+            actual_else_transition = None
+
+        result.add("// transitions")
+        generated_if = False
+        
+        # Create all transition if cases
+        for j, transition in enumerate((x for x in state.transitions if x not in else_transitions and x != actual_else_transition)):
+            cond_name = "else if"
+            if j == 0:
+                generated_if = True
+                cond_name = "if"
+            result.add(f"{cond_name} ({self._generate_condition_for_transition(transition)}) {{")
+            with result as transition_body:
+                transition_body += self._generate_transition_body(transition)
+            result.add("}")
+
+        for j, transition in enumerate(else_transitions):
+            cond_name = "else if"
+            if j == 0 and not generated_if:
+                generated_if = True
+                cond_name = "if"
+            # TODO: condition else
+            result.add(f"{cond_name} (/* todo conditions */ false) {{}}")
+
+        if actual_else_transition:
+            if generated_if:
+                result.add("else {")
+            with result as transition_body:
+                transition_body += self._generate_transition_body(actual_else_transition)
+            if generated_if:
+                result.add("}")
+        if state in self.dfa.accepting_states:
+            result.add(f"return {self.program_name.upper()}_DONE;")
+        else:
+            result.add(f"return {self.program_name.upper()}_OK;")
+        return result.value()
+
+    def _generate_feed_implementation(self):
+        result = Outputter()
+
+        result.add(f"{self.program_name}_result_t {self.program_name}_feed(uint8_t inval, bool is_end, {self.program_name}_state_t *state) {{")
+        with result as contents:
+            # The body of feed is a massive switch statement
+            contents.add("switch (state->state) {")
+            for idx, state in enumerate(self.dfa.states):
+                # Emit the case label
+                contents.add(f"case {idx}:")
+                with contents as state_body:
+                    # Is this a normal state
+                    if state is not self.generic_fail_state:
+                        state_body += self._generate_switch_body(state)
+                    else:
+                        state_body.add(f"return {self.program_name.upper()}_FAIL;")
+
+            contents.add(f"default: return {self.program_name.upper()}_FAIL;")
+            contents.add("}")
+
+        result.add("}")
+        return result.value()
+
 # =============
 # DEBUG DUMPERS
 # =============
@@ -2798,8 +3199,10 @@ def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=Non
             nonlocal sidx
             sidx += 1
             return f"cluster_{idx}"
+
+        g.node("c_0", style="invis")
         
-        debug_dump_ast(ast, into=g, coming_from=[], make_id=_make_id, make_subgraph=_make_sid)
+        debug_dump_ast(ast, into=g, coming_from=["c_0"], make_id=_make_id, make_subgraph=_make_sid)
 
         g.render(out_name, format="pdf", cleanup=True)
         return
@@ -2990,7 +3393,20 @@ if __name__ == "__main__":
     total = dctx.dfa
 
     print("c")
-    debug_dump_dfa(dctx.dfa)
+    #debug_dump_dfa(dctx.dfa)
+
+    cctx = CodegenCtx(dctx, "http")
+    print("header: ")
+    header = cctx.generate_header()
+    print(header)
+    print("source: ")
+    source = cctx.generate_source()
+    print(source)
+
+    with open("http.h", "w") as f:
+        f.write(header)
+    with open("http.c", "w") as f:
+        f.write(source)
 
     #in_arr = []
     #while hasattr(pos, "match"):
