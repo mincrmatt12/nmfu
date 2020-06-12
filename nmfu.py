@@ -2436,6 +2436,7 @@ class LoopNode(ActionSinkNode, HasDefaultDebugInfo):
         for transition in sub_dfa.transitions_that_do(self.break_action):
             transition.to(end_state)
             transition.actions.remove(self.break_action)
+            transition.actions.extend(self.after_break_actions)
             should_try_to_append = True
 
         # Verify that the accepting states are all distinct
