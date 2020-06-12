@@ -7,7 +7,7 @@ out bool accept_gzip = false;
 out bool has_etag = false;
 out str[32] etag;
 out enum{GET,POST} method;
-out enum{OK,BADR,URLL,ETAGL} result;
+out enum{OK,BADR,URLL,ETAGL,BADM} result;
 out int content_size = 0;
 
 // "subroutine"-esque functionality. duplicate states are optimized out.
@@ -37,6 +37,11 @@ parser { // declare the actual parser
             "GET" -> {method = GET;}
             "POST" -> {method = POST;}
             // no else here, so invalid methods will fall back to the catch. We _could_ add a seperate case which sets result as an enum here
+            else -> {
+                result = BADM;
+                waitend();
+                finish;
+            }
         }
 
         " "; // match a space
