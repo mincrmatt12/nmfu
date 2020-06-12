@@ -569,7 +569,7 @@ class ProgramData:
     _OPTIMIZE_LEVELS = {
         0: (),     # -O0 (nothing)
         1: (ProgramFlag.SIMPLIFY_ELSE_CONDITIONS, ProgramFlag.REMOVE_INACCESIBLE_STATES),       # -O1 (the default)
-        2: (),     #- O2 (adds to 1, 2)
+        2: (ProgramFlag.COLLAPSE_TRANSITION_RANGES,),     #- O2 (adds to 1, 2)
         3: (),
     }
 
@@ -3296,11 +3296,67 @@ class CodegenCtx:
         else:
             return f"inval == {ord(on_value)} /* {on_value!r} */"
 
+    def _generate_range_check(self, min_cpoint, max_cpoint):
+        """
+        Get a range check for min_cpoint <= x <= max_cpoint
+        """
+
+        return f"({ord(min_cpoint)} <= inval && inval <= {ord(max_cpoint)} /* {repr(min_cpoint)} - {repr(max_cpoint)} */)"
+
     def _generate_condition_for_transition(self, transition: DFTransition):
-        # TODO: plenty of optimizations here, right now just do an equal for each of them
-        result = " || ".join(self._generate_equal_check(x) for x in transition.on_values)
+        """
+        Generate a string which can be inserted into an if () condition that returns true
+        if the transition should be taken
+        """
+
+        # The general approach here is to use the various match techniques to extract "better" conditions, until
+        # being left with either a few sparse values in an on_values copy or indeed nothing. This forms the initial
+        # value of the result string
+
+        on_values_remaining = transition.on_values[:]
+        checks = []
+
+        if ProgramData.do(ProgramFlag.COLLAPSE_TRANSITION_RANGES) and len(on_values_remaining) >= ProgramData.option(ProgramOption.COLLAPSED_RANGE_LENGTH):
+            # sort the on values in ascending order
+            on_values_remaining.sort(key=lambda x: x if isinstance(x, str) else '') # end goes at the beginning
+
+            used = []  # store all removed values into an array
+            start_idx = 1 if DFTransition.End in on_values_remaining else 0
+
+            range_start = start_idx
+            range_end = start_idx
+
+            for i in range(start_idx + 1, len(on_values_remaining)):
+                if ord(on_values_remaining[i-1]) + 1 == ord(on_values_remaining[i]):
+                    range_end = i
+                else:
+                    if range_end - range_start >= ProgramData.option(ProgramOption.COLLAPSED_RANGE_LENGTH):
+                        # this is a valid range
+                        for j in range(range_start, range_end+1):
+                            used.append(on_values_remaining[j])
+                        checks.append(self._generate_range_check(on_values_remaining[range_start], on_values_remaining[range_end]))
+                    range_start = i
+                    range_end = i
+
+            if range_end - range_start >= ProgramData.option(ProgramOption.COLLAPSED_RANGE_LENGTH):
+                # this is a valid range
+                for j in range(range_start, range_end+1):
+                    used.append(on_values_remaining[j])
+                checks.append(self._generate_range_check(on_values_remaining[range_start], on_values_remaining[range_end]))
+
+            for x in used:
+                on_values_remaining.remove(x)
+
+        # Match the remaining ones with boring equals
+        checks.extend(self._generate_equal_check(x) for x in on_values_remaining)
+
+        result = " || ".join(checks)
+
+        condition_strs = [self._generate_condition_for_transition_condition(x) for x in transition.conditions]
         if DFTransition.End not in transition.on_values:
-            result = f"({result}) && !is_end"
+            condition_strs.append("!is_end")
+        if condition_strs:
+            result = f"({result}) && {' && '.join(condition_strs)}"
         return result
 
     def _generate_condition_for_transition_condition(self, trans_condition):
