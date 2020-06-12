@@ -307,8 +307,8 @@ to NMFU.
 The generated API contains two or three functions, depending on whether or not dynamic memory was used in the parser. These are:
 
 - `{parser_name}_result_t {parser_name}_start({parser_name}_state_t * state);`
-- `{parser_name}_result_t {parser_name}_feed(uint8_t inval, bool is_end, {parser_name}_state_t * state);`
-- `void {parser_name}_free({parser_name}_state_t * state);` (only generated if dynamic memory is used)
+- `{parser_name}_result_t {parser_name}_feed (uint8_t inval, bool is_end, {parser_name}_state_t * state);`
+- `void                   {parser_name}_free ({parser_name}_state_t * state);` (only generated if dynamic memory is used)
 
 These are used to initialize the parser state, send an input character (or end-of-input condition) to the parser, and free any allocated resources
 for the parser (if present).
