@@ -2,3 +2,7 @@
 *.pyc
 *.pdf
 *.png
+*.egg-info
+
+build/*
+dist/*
