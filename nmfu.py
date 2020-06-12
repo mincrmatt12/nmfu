@@ -5,7 +5,7 @@ NMFU - the "no memory for you" "parser" generator.
 designed to create what a compsci major would yell at me for calling a dfa to parse files/protocols character by character while using as little
 RAM as possible.
 
-Copyright (c) Matthew Mirvish 2020
+Copyright (C) 2020 Matthew Mirvish
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -657,6 +657,13 @@ class ProgramData:
         return -1
 
     @classmethod
+    def _print_version(cls):
+        print("nmfu", __version__)
+        print("Copyright (C) 2020 Matthew Mirvish")
+        print("This is free software; see the source for copying conditions.  There is NO")
+        print("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.")
+
+    @classmethod
     def _print_help(cls):
         print("Usage: nmfu [options] input")
         print("")
@@ -668,6 +675,7 @@ class ProgramData:
         print("  --dump-prefix <arg>                        Write dumped pdfs to files starting with <arg> (default is program name)")
         print("  -t, --dry-run                              Only convert the input to a DFA (and possibly dump), don't generate code")
         print("  -h, --help                                 Show this help screen")
+        print("  --version                                  Show the version of nmfu")
         print("")
         print("Generation Options:")
         pad_length = 4 + len(max(ProgramOption, key=lambda x: len(x.name)).name) + 6
@@ -729,7 +737,7 @@ class ProgramData:
                     continue
                 elif option[1] == "-":
                     option_name = option[2:]
-                    if option_name not in ["help", "dry-run"]:
+                    if option_name not in ["help", "dry-run", "version"]:
                         option_value = next(all_cmd_options_iter)
                 else:
                     option_name = option[1]
@@ -766,6 +774,9 @@ class ProgramData:
                 flag_overrides[ProgramFlag[flag_name]] = set_to
             elif option_name in ["h", "help"]:
                 cls._print_help()
+                exit(0)
+            elif option_name == "version":
+                cls._print_version()
                 exit(0)
             elif option_name in ["d", "dump"]:
                 for i in option_value.split(","):
