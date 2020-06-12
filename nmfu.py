@@ -6,8 +6,9 @@ designed to create what a compsci major would yell at me for calling a dfa to pa
 RAM as possible.
 """
 
+__version__ = "0.1"
+
 import lark
-import click
 import abc
 import enum
 import string
@@ -149,10 +150,9 @@ parser = lark.Lark(grammar, propagate_positions=True, lexer="dynamic_complete")
 NMFU operates in a few 'stages':
 
 - 1. conversion to actual AST (removes variable assignments and turns them into actions)
-- 2. conversion to state machine recursively with abstract actions
-- 3. make actions concrete (remove append instrs.)
-- 4. (optional) state machine optimizing
-- 5. codegen
+- 2a. conversion to state machine recursively with abstract actions
+- 2b. (optional) state machine optimizing
+- 3. codegen
 
 The overall architecture is similar to MLang, with various context classes which each steal the resources from a
 predecessor ctx.
@@ -161,10 +161,6 @@ predecessor ctx.
 # ===========
 # STATE TYPES
 # ===========
-
-class ForwardStateRef:
-    def __init__(self):
-        self._dependents = []
 
 class DFTransition:
     """
@@ -3745,7 +3741,7 @@ def debug_dump_regextree(rx, indent=0):
         lprint("optional")
         debug_dump_regextree(rx.sub_match, indent=indent+1)
 
-if __name__ == "__main__":
+def main():
     try:
         input_file, program_name = ProgramData.load_commandline_flags(sys.argv[1:])
     except RuntimeError as e:
@@ -3810,3 +3806,6 @@ if __name__ == "__main__":
         f.write(header)
     with open(program_name + ".c", "w") as f:
         f.write(source)
+
+if __name__ == "__main__":
+    main()
