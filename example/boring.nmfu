@@ -1,7 +1,8 @@
 out str[32] url;
+out int test;
 
 parser {
-loop {
+loop hi {
     case {
         "GET" -> {url = ""; "GET";}
         "POST" -> {"POST";}
@@ -12,8 +13,10 @@ loop {
 
 	optional {
 		"Hi";
+		break hi;
 	}
 
 	"Ooof";
 }
+		test = 2;
 }
