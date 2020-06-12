@@ -288,13 +288,13 @@ There are some key differences though:
 - Alternation operates on single characters or groups. This can cause incompatibilities, for example:
 
      ```
-/abc|def/; // matches ab, c or d, then ef, not abc or def.
+     /abc|def/; // matches ab, c or d, then ef, not abc or def.
      ```
 
      which must instead be written as 
 
      ```
-/(abc)|(def)/;
+     /(abc)|(def)/;
      ```
 - Groups are non-capturing, in the sense that they serve no function other than to logically group components together
 - The space character must be escaped, due to limitations in the lexer.
