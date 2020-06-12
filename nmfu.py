@@ -3021,7 +3021,7 @@ class CodegenCtx:
         result.add(f"{self.program_name}_result_t {self.program_name}_start({self.program_name}_state_t *state);")
         result.add(f"{self.program_name}_result_t {self.program_name}_feed(uint8_t inval, bool is_end, {self.program_name}_state_t *state);")
         if ProgramData.do(ProgramFlag.DYNAMIC_MEMORY):
-            result.add(f"{self.program_name}_result_t {self.program_name}_free({self.program_name}_state_t *state);")
+            result.add(f"void {self.program_name}_free({self.program_name}_state_t *state);")
         result.add("#endif")
 
         return result.value()
@@ -3215,10 +3215,23 @@ class CodegenCtx:
             value = self._generate_code_for_int_expr(action.value_expr, IntegerExprUseContext.ASSIGN_INITIAL if is_start else IntegerExprUseContext.ASSIGN_ON_MATCH, target)
             result.add(f"state->c.{target.name} = {value};")
         elif isinstance(action, SetToStr):
+            # Check if we need to allocate
+            if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND) and action.into_storage.default_value is None:  # if it wasn't None it'd be allocated in the start()
+                if is_start:
+                    # if we're at the start, and there's no default value, and on demand is in effect, there's no possible way for state->c to have any value other than NULL
+                    result.add(f"state->c.{action.into_storage.name} = malloc({action.into_storage.str_size});")
+                else:
+                    result.add(f"if (!state->c.{action.into_storage.name}) state->c.{action.into_storage.name} = malloc({action.into_storage.str_size});")
             result.add(self._generate_set_string(action.value_expr, action.into_storage))
             result.add(f"state->{action.into_storage.name}_counter = {len(action.value_expr)};")
         elif isinstance(action, AppendTo):
-            result.add(f"if (state->{action.into_storage.name}_counter == {action.into_storage.str_size}) state->state = {self.dfa.states.index(action.end_target)};")
+            # Check if we need to allocate
+            if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND) and action.into_storage.default_value is None:  # if it wasn't None it'd be allocated in the start()
+                result.add(f"if (!state->c.{action.into_storage.name}) state->c.{action.into_storage.name} = malloc({action.into_storage.str_size});")
+            # We treat the size given in by the user as including a terminating null
+            # Admittedly, this is a little hit or miss, but if they give too long a string it's really their fault so /shrug
+            # TODO: customization point to disable this and not put terminating nulls on strings
+            result.add(f"if (state->{action.into_storage.name}_counter == {action.into_storage.str_size-1}) state->state = {self.dfa.states.index(action.end_target)};")
             result.add("else {")
             with result as body:
                 body.add(f"state->c.{action.into_storage.name}[state->{action.into_storage.name}_counter++] = inval;")
@@ -3378,7 +3391,7 @@ class CodegenCtx:
     def _generate_free_implementation(self):
         result = Outputter()
 
-        result.add(f"{self.program_name}_result_t {self.program_name}_free({self.program_name}_state_t *state) {{")
+        result.add(f"void {self.program_name}_free({self.program_name}_state_t *state) {{")
         
         with result as contents:
             # If strings were allocated dynamically, free every string (rationale is that they will be nullptrs)
