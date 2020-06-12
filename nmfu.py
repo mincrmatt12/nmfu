@@ -116,9 +116,6 @@ regex_char_class: "\\" REGEX_CHARCLASS
 // TERMINALS
 BOOL_CONST: /true|false/
 
-// mode types
-MODE_STR: /ascii|utf8|raw/
-
 // catch options
 CATCH_OPTION: /nomatch|outofspace/
 
