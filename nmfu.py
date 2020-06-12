@@ -657,7 +657,7 @@ class ProgramData:
         print("  -o<arg>, --output <arg>                    Output name without extension")
         print("  -O<level>                                  Optimization level (default: 1)")
         print("  -f<flag>, -fno-<flag>, --flag <flag>=<arg> Enable or disable a flag")
-        print("  --dump <arg>,<arg>, -d<arg>,<arg>          Dump <args> to pdfs or stdout. Possible values are: " + ", ".join(x.value for x in DebugDumpable))
+        print("  -d<arg>,<arg>, --dump <arg>,<arg>          Dump <args> to pdfs or stdout. Possible values are: " + ", ".join(x.value for x in DebugDumpable))
         print("  --dump-prefix <arg>                        Write dumped pdfs to files starting with <arg> (default is program name)")
         print("  -t, --dry-run                              Only convert the input to a DFA (and possibly dump), don't generate code")
         print("  -h, --help                                 Show this help screen")
