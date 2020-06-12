@@ -766,19 +766,35 @@ class ProgramData:
             cls._flags[k] = v
 
         # Set implies
-        for k, v in cls._flags.items():
-            if v:
-                for x in k.implies:
-                    cls._flags[x] = True
+        while True:
+            did_something = False
+            for k, v in cls._flags.items():
+                if v:
+                    for x in k.implies:
+                        if not cls._flags[x]:
+                            did_something = True
+                        cls._flags[x] = True
+            if not did_something:
+                break
 
-        # Check exclusive
-        for k, v in flag_overrides.items():
-            if v:
-                for x in k.exclusive_with:
-                    if flag_overrides.get(ProgramFlag(x), False):
-                        raise RuntimeError("Conflicting flags")
-                    elif cls._flags[ProgramFlag(x)]:
-                        cls._flags[ProgramFlag(x)] = False
+        # Fix exclusives for only the user specified values
+        def aux(flag):
+            print("investigating", flag)
+            for conflict in flag.exclusive_with:
+                conflict = ProgramFlag(conflict)
+                if conflict in flag_overrides and flag_overrides[conflict]:
+                    raise RuntimeError("Conflict between " + conflict + " and " + flag)
+                elif cls._flags[conflict]:
+                    # ensure it's set to false, and go through _its_ conflicts
+                    cls._flags[conflict] = False
+            # also investigate the things it implies as if they were specified
+            for implies in flag.implies:
+                implies = ProgramFlag(implies)
+                aux(implies)
+
+        for flag in flag_overrides.keys():
+            if cls._flags[flag]:
+                aux(flag)
 
         return (input_filename, program_output_name)
 
