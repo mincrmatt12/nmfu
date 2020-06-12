@@ -554,6 +554,10 @@ class HasDefaultDebugInfo:
     def debug_lookup(self, tag: DebugTag):
         return None
 
+class DebugDumpable(enum.Enum):
+    AST = "ast"
+    DFA = "dfa"
+
 class ProgramData:
     _collection = defaultdict(dict)
     _children = defaultdict(list)
@@ -565,6 +569,7 @@ class ProgramData:
     _options = {
             x: x.default for x in ProgramOption
     }
+    _dump = []
 
     _OPTIMIZE_LEVELS = {
         0: (),     # -O0 (nothing)
@@ -648,6 +653,7 @@ class ProgramData:
         print("  -o<arg>, --output <arg>                    Output name without extension")
         print("  -O<level>                                  Optimization level (default: 1)")
         print("  -f<flag>, -fno-<flag>, --flag <flag>=<arg> Enable or disable a flag")
+        print("  --dump <arg>,<arg>                         Dump <args> to pdfs or stdout. Possible values are: ast, dfa")
         print("")
         print("Generation Options:")
         pad_length = 4 + len(max(ProgramOption, key=lambda x: len(x.name)).name) + 6
@@ -746,6 +752,9 @@ class ProgramData:
             elif option_name in ["h", "help"]:
                 cls._print_help()
                 exit(0)
+            elif option_name == "dump":
+                for i in option_value.split(","):
+                    cls._dump.append(DebugDumpable(i))
             else:
                 p_option_name = option_name.upper().replace("-", "_")
                 if p_option_name not in ProgramOption.__members__:
@@ -805,6 +814,10 @@ class ProgramData:
     @classmethod
     def option(self, opt):
         return self._options[opt]
+
+    @classmethod
+    def dump(self, dumpable):
+        return dumpable in self._dump
 
 class IndexableInstance(type):
     def __init__(self, name, bases, dct):
@@ -3731,8 +3744,12 @@ if __name__ == "__main__":
     pctx = ParseCtx(parse_tree)
     pctx.parse()
 
+    if ProgramData.dump(DebugDumpable.AST): debug_dump_ast(pctx.ast)
+
     dctx = DfaCompileCtx(pctx)
     dctx.compile()
+
+    if ProgramData.dump(DebugDumpable.DFA): debug_dump_dfa(dctx.dfa)
 
     total = dctx.dfa
     cctx = CodegenCtx(dctx, program_name)
