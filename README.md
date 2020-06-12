@@ -5,6 +5,8 @@ _the "no memory for you" "parser" generator_
 
 ---
 
+![PyPI - License](https://img.shields.io/pypi/l/nmfu) [![PyPI](https://img.shields.io/pypi/v/nmfu)](https://pypi.org/project/nmfu) 
+
 `nmfu` attempts to turn a parser specified as a procedural matching thing into a state machine. It's much more obvious what it
 does if you read some of the examples.
 
