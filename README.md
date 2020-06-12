@@ -384,3 +384,12 @@ http_free(&state);
 ```
 
 A more complete example is present in `example/http_test.c`.
+
+## Plugins
+
+There is a vim plugin available which adds syntax highlighting for `.nmfu` files at [mincrmatt12/nmfu-vim](https://github.com/mincrmatt12/nmfu-vim).
+
+## License
+
+NMFU is licensed under the GPLv3.
+Copyright (C) 2020 Matthew Mirvish.
