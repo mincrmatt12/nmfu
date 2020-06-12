@@ -557,6 +557,7 @@ class HasDefaultDebugInfo:
 class DebugDumpable(enum.Enum):
     AST = "ast"
     DFA = "dfa"
+    TRACEBACK = "traceback"
 
 class ProgramData:
     _collection = defaultdict(dict)
@@ -570,6 +571,9 @@ class ProgramData:
             x: x.default for x in ProgramOption
     }
     _dump = []
+
+    dump_prefix = None
+    dry_run = False
 
     _OPTIMIZE_LEVELS = {
         0: (),     # -O0 (nothing)
@@ -653,7 +657,10 @@ class ProgramData:
         print("  -o<arg>, --output <arg>                    Output name without extension")
         print("  -O<level>                                  Optimization level (default: 1)")
         print("  -f<flag>, -fno-<flag>, --flag <flag>=<arg> Enable or disable a flag")
-        print("  --dump <arg>,<arg>                         Dump <args> to pdfs or stdout. Possible values are: ast, dfa")
+        print("  --dump <arg>,<arg>, -d<arg>,<arg>          Dump <args> to pdfs or stdout. Possible values are: " + ", ".join(x.value for x in DebugDumpable))
+        print("  --dump-prefix <arg>                        Write dumped pdfs to files starting with <arg> (default is program name)")
+        print("  -t, --dry-run                              Only convert the input to a DFA (and possibly dump), don't generate code")
+        print("  -h, --help                                 Show this help screen")
         print("")
         print("Generation Options:")
         pad_length = 4 + len(max(ProgramOption, key=lambda x: len(x.name)).name) + 6
@@ -715,7 +722,8 @@ class ProgramData:
                     continue
                 elif option[1] == "-":
                     option_name = option[2:]
-                    option_value = next(all_cmd_options_iter)
+                    if option_name not in ["help", "dry-run"]:
+                        option_value = next(all_cmd_options_iter)
                 else:
                     option_name = option[1]
                     option_value = option[2:]
@@ -752,9 +760,13 @@ class ProgramData:
             elif option_name in ["h", "help"]:
                 cls._print_help()
                 exit(0)
-            elif option_name == "dump":
+            elif option_name in ["d", "dump"]:
                 for i in option_value.split(","):
                     cls._dump.append(DebugDumpable(i))
+            elif option_name == "dump-prefix":
+                cls.dump_prefix = option_value
+            elif option_name in ["t", "dry-run"]:
+                cls.dry_run = True
             else:
                 p_option_name = option_name.upper().replace("-", "_")
                 if p_option_name not in ProgramOption.__members__:
@@ -788,7 +800,6 @@ class ProgramData:
 
         # Fix exclusives for only the user specified values
         def aux(flag):
-            print("investigating", flag)
             for conflict in flag.exclusive_with:
                 conflict = ProgramFlag(conflict)
                 if conflict in flag_overrides and flag_overrides[conflict]:
@@ -805,6 +816,9 @@ class ProgramData:
             if cls._flags[flag]:
                 aux(flag)
 
+        if cls.dump_prefix is None:
+            cls.dump_prefix = program_output_name
+        
         return (input_filename, program_output_name)
 
     @classmethod
@@ -3733,28 +3747,65 @@ def debug_dump_regextree(rx, indent=0):
         debug_dump_regextree(rx.sub_match, indent=indent+1)
 
 if __name__ == "__main__":
-    input_file, program_name = ProgramData.load_commandline_flags(sys.argv[1:])
+    try:
+        input_file, program_name = ProgramData.load_commandline_flags(sys.argv[1:])
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        print("Try nmfu --help for more information", file=sys.stderr)
+        exit(1)
 
-    with open(input_file) as f:
-        contents = f.read()
+    try:
+        with open(input_file) as f:
+            contents = f.read()
+    except IOError as e:
+        print("Unable to read input file:", str(e), file=sys.stderr)
+        exit(2)
 
     ProgramData.load_source(contents)
-    parse_tree = parser.parse(contents)
+    try:
+        parse_tree = parser.parse(contents)
+    except lark.LarkError as e:
+        print("Syntax error:", str(e), file=sys.stderr)
+        exit(3)
 
     pctx = ParseCtx(parse_tree)
-    pctx.parse()
 
-    if ProgramData.dump(DebugDumpable.AST): debug_dump_ast(pctx.ast)
+    try:
+        pctx.parse()
+    except NMFUError as e:
+        if ProgramData.dump(DebugDumpable.TRACEBACK):
+            raise
+        else:
+            print("Parse error:", str(e), file=sys.stderr)
+            exit(4)
+
+    if ProgramData.dump(DebugDumpable.AST): debug_dump_ast(pctx.ast, ProgramData.dump_prefix + ".ast")
 
     dctx = DfaCompileCtx(pctx)
-    dctx.compile()
+    try:
+        dctx.compile()
+    except NMFUError as e:
+        if ProgramData.dump(DebugDumpable.TRACEBACK):
+            raise
+        else:
+            print("Compile error:", str(e), file=sys.stderr)
+            exit(5)
 
-    if ProgramData.dump(DebugDumpable.DFA): debug_dump_dfa(dctx.dfa)
+    if ProgramData.dump(DebugDumpable.DFA): debug_dump_dfa(dctx.dfa, ProgramData.dump_prefix + ".dfa")
+    if ProgramData.dry_run:
+        print("... dry run, skipping code generation")
+        exit(0)
 
-    total = dctx.dfa
     cctx = CodegenCtx(dctx, program_name)
-    header = cctx.generate_header()
-    source = cctx.generate_source()
+    try:
+        header = cctx.generate_header()
+        source = cctx.generate_source()
+    except NMFUError as e:
+        if ProgramData.dump(DebugDumpable.TRACEBACK):
+            raise
+        else:
+            print("Codegen error:", str(e), file=sys.stderr)
+            exit(5)
 
     with open(program_name + ".h", "w") as f:
         f.write(header)
