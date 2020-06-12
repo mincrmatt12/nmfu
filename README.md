@@ -352,6 +352,13 @@ typedef struct http_state http_state_t;
 Additional enumeration types for every declared enum _output-variable_ are also generated, using the name `{parser_name}_out_{out_var_name}_t`. The names
 of the constants use, in all-capitals, `{parser_name}_{out_var_name}_{enum_constant}`; for example `HTTP_RESULT_URLL`.
 
+One additional enumeration is always defined, called `{parser_name}_result_t` which contains the various result codes from NMFU-generated functions.
+These contain the values `{parser_name}_DONE`, `{parser_name}_OK` and `{parser_name}_FAIL`, for example `HTTP_OK`.
+
+- `OK` means that more input should be sent.
+- `FAIL` means that the parser has entered a failing state. This is the default behaviour if no _try-except-statement_ is present.
+- `DONE` means that either a _finish-statement_ executed or the parser has reached the end of it's statements.
+
 ### Example Usage
 
 A basic usage of a generated parser looks something like
