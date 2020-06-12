@@ -133,7 +133,7 @@ BOOL_CONST: /true|false/
 CATCH_OPTION: /nomatch|outofspace/
 
 %import common.CNAME -> IDENTIFIER
-%import common.NUMBER
+%import common.SIGNED_INT -> NUMBER
 
 STRING: /"(?:[^"\\]|\\.)*"/
 
