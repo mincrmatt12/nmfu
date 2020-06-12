@@ -49,7 +49,7 @@ parser { // declare the actual parser
         // The more common method of reading "arbitrary" input:
 
         try {
-            url += /[\/a-zA-Z0-9.\-_?=&+]+/; // Interesting note here, assign statements like this will treat "strings" as just that, literal strings. If you actually want to read _and_ assign, use the explicit "read"
+            url += /[\/a-zA-Z0-9.\-_?=&+]+/;
         }
         catch (outofspace) {
             waitend();
@@ -58,7 +58,6 @@ parser { // declare the actual parser
         }
         // Also note that there's an implicit maximum length here. Violating this will trigger an "outofspace" type error (it is possible to provide a comma separated list of exceptions
         // to handle for a catch).
-        // Explicit length restrictions can be expressed using normal regex syntax.
 
         " HTTP/1.1\r\n"; // Match the http version and CRLF
 
@@ -84,8 +83,8 @@ parser { // declare the actual parser
                         finish;
                     }
 
-                    optional { // optional segment, if match error occurs _AT THE BEGINNING_ it will ignore and try the next instruction.
-                        // if a match error occurs _DURING_ parsing of this block, a catch is generated _UNLESS_ it is still possible to parse the next statement.
+                    optional { // optional statement, must be decideable at the first character, although this is subject to change and may become similar to 
+                        // case statements.
                         /(,\ ?([wW]\/)?"[^"]*")+/; // match extra etags, we only want the first one.
                     }
 
