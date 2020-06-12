@@ -15,6 +15,8 @@ requiring a separate task since it can be done character by character.
 You can also define various output variables which can be manipulated inside the parser program, which can then be examined after parsing.
 See `example/http.nmfu` for a good example of using this functionality.
 
+The rest of this README is a guide to using NMFU.
+
 ## Parser Specification
 
 NMFU source files support C-style line comments (text after `//` on a line is ignored until the end of the line)
@@ -296,4 +298,80 @@ There are some key differences though:
      ```
 - Groups are non-capturing, in the sense that they serve no function other than to logically group components together
 - The space character must be escaped, due to limitations in the lexer.
-  
+
+## Generated C API
+
+The output of NMFU is a C source file and header pair. All declarations within the header are prefixed with the output name provided
+to NMFU.
+
+The generated API contains two or three functions, depending on whether or not dynamic memory was used in the parser. These are:
+
+- `{parser_name}_result_t {parser_name}_start({parser_name}_state_t * state);`
+- `{parser_name}_result_t {parser_name}_feed(uint8_t inval, bool is_end, {parser_name}_state_t * state);`
+- `void {parser_name}_free({parser_name}_state_t * state);` (only generated if dynamic memory is used)
+
+These are used to initialize the parser state, send an input character (or end-of-input condition) to the parser, and free any allocated resources
+for the parser (if present).
+
+The generated `{parser_name}_state_t` struct contains the member `c` within which all of the declared _output-variables_ are accessible. Additionally,
+the length of all string variables can be found under members with the name `{out_var_name}_counter`.
+
+For example, the generated state structure for 
+
+```
+out str[32] url;
+out bool accept_gzip = false;
+out bool has_etag = false;
+out str[32] etag;
+out enum{GET,POST} method;
+out enum{OK,BADR,URLL,ETAGL,BADM} result;
+out int content_size = 0;
+```
+
+looks like:
+
+```c
+// state object
+struct http_state {
+    struct {
+        char url[32];
+        bool accept_gzip;
+        bool has_etag;
+        char etag[32];
+        http_out_method_t method;
+        http_out_result_t result;
+        int32_t content_size;
+    } c;
+    uint8_t url_counter;
+    uint8_t etag_counter;
+    uint8_t state;
+};
+typedef struct http_state http_state_t;
+```
+
+Additional enumeration types for every declared enum _output-variable_ are also generated, using the name `{parser_name}_out_{out_var_name}_t`. The names
+of the constants use, in all-capitals, `{parser_name}_{out_var_name}_{enum_constant}`; for example `HTTP_RESULT_URLL`.
+
+### Example Usage
+
+A basic usage of a generated parser looks something like
+
+```c
+
+http_state_t state;
+http_start(&state); // could potentially return something other than OK if, for example, if the first statement in the parser was "finish" for some reason.
+
+http_feed('G', false, &state);
+http_feed('E', false, &state);
+http_feed('T', false, &state);
+
+// ...
+
+http_result_t code = http_feed(0 /* value unimportant, conventionally zero */, true, &state);
+
+// ... do something with the code and state ...
+
+http_free(&state);
+```
+
+A more complete example is present in `example/http_test.c`.
