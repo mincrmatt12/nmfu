@@ -2796,7 +2796,6 @@ class ParseCtx:
 
         if targeted.type == OutputStorageType.STR and is_append:
             # Create an append expression
-            # TODO: end expr target (try/except?)
             match_node = MatchNode(self._parse_match_expr(stmt.children[1]))
             match_node.match.attach(AppendTo(self.exception_handlers[ErrorReasons.OUT_OF_SPACE], targeted))
             return match_node
@@ -2806,7 +2805,6 @@ class ParseCtx:
             else:
                 return ActionNode(SetToStr(self._convert_string(stmt.children[1].children[0].value), targeted))
         elif not is_append:
-            # TODO: try to check the return type
             return ActionNode(SetTo(self._parse_integer_expr(stmt.children[1], targeted), targeted))
 
     def _parse_case_clause(self, clause: lark.Tree):
@@ -3121,7 +3119,6 @@ class CodegenCtx:
                 contents.add("} c;")
 
             if any(x.type == OutputStorageType.STR for x in self.state_object_spec):
-                # TODO: maximum size checking / even necessary size checking?
                 for out_str in (x for x in self.state_object_spec if x.type == OutputStorageType.STR):
                     contents.add(self._integer_containing(out_str.str_size, signed=False), f"{out_str.name}_counter;")
 
