@@ -540,6 +540,8 @@ class ProgramFlag(int, enum.Enum):
     ALLOCATE_STR_SPACE_DYNAMIC   = (6, "Allocate string space dynamically", False, (7,), (5,))  # implies DYNAMIC
     ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND = (8, "Allocate string space on demand", False, (6,))  # implies DYNAMIC
 
+    USE_PRAGMA_ONCE = (10, "Use #pragma once instead of an #ifndef guard in the header")
+
 class ProgramOption(enum.Enum):
     def __init__(self, default, helpstr):
         self.default = default
@@ -3019,9 +3021,11 @@ class CodegenCtx:
 
     def generate_header(self):
         result = Outputter()
-        # todo: allow user to use pragma once
-        result.add(f"#ifndef {self.program_name.upper()}_H")
-        result.add(f"#define {self.program_name.upper()}_H")
+        if ProgramData.do(ProgramFlag.USE_PRAGMA_ONCE):
+            result.add("#pragma once")
+        else:
+            result.add(f"#ifndef {self.program_name.upper()}_H")
+            result.add(f"#define {self.program_name.upper()}_H")
         result.add("#include <stdbool.h>")
         result.add("#include <stdint.h>")
         result.add()
@@ -3047,7 +3051,8 @@ class CodegenCtx:
         result.add(f"{self.program_name}_result_t {self.program_name}_feed(uint8_t inval, bool is_end, {self.program_name}_state_t *state);")
         if ProgramData.do(ProgramFlag.DYNAMIC_MEMORY):
             result.add(f"void {self.program_name}_free({self.program_name}_state_t *state);")
-        result.add("#endif")
+        if not ProgramData.do(ProgramFlag.USE_PRAGMA_ONCE):
+            result.add("#endif")
 
         return result.value()
 
