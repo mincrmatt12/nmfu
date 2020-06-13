@@ -249,14 +249,19 @@ class DFState:
         self.transitions = []
         DFState.all_states[id(self)] = self
 
-    def transition(self, transition, allow_replace=False):
+    def transition(self, transition, allow_replace=False, allow_replace_if=None):
+        if allow_replace_if is None:
+            allow_replace = lambda x: allow_replace
+        else:
+            allow_replace = allow_replace_if
+
         contained = None
         for i in self.all_transitions():
             if i.conditions == transition.conditions and (set(i.on_values) & set(transition.on_values)):
                 contained = i
                 break
         if contained is not None and contained.target != transition.target:
-            if allow_replace:
+            if allow_replace(contained):
                 for x in transition.on_values:
                     try:
                         contained.on_values.remove(x)
@@ -469,7 +474,7 @@ class DFA:
 
         return False
 
-    def append_after(self, chained_dfa: "DFA", sub_states=None, mark_accept=True, chain_actions=None):
+    def append_after(self, chained_dfa: "DFA", treat_as_else: DFState, sub_states=None, mark_accept=True, chain_actions=None):
         """
         Add the chained_dfa in such a way that its start state "becomes" all of the `sub_states` (or if unspecified, the accept states of _this_ dfa)
         """
@@ -482,10 +487,16 @@ class DFA:
             for transition in chained_dfa.starting_state.transitions: # specifically exclude the else transition
                 try:
                     if not chain_actions:
-                        sub_state.transition(transition.copy(), DFTransition.Else in transition.on_values)
+                        sub_state.transition(transition.copy(), allow_replace_if=lambda x: x.target == treat_as_else)
                     else:
-                        sub_state.transition(transition.copy().attach(*chain_actions, prepend=True), DFTransition.Else in transition.on_values)
+                        sub_state.transition(transition.copy().attach(*chain_actions, prepend=True), allow_replace_if=lambda x: x.target == treat_as_else)
                 except IllegalDFAStateError as e:
+                    # Check if this is a transition to an else case
+                    if transition.target == treat_as_else:
+                        # If the sub_state already has something pointing there, it probably deals with properly
+                        if any(x.target == treat_as_else for x in sub_state.transitions):
+                            # ignore the error
+                            continue
                     # Rewrite the error as something more useful
                     raise IllegalDFAStateConflictsError("Ambigious transitions detected while joining matches", sub_state, chained_dfa.starting_state) from e
 
@@ -2122,7 +2133,7 @@ class ConcatMatch(Match):
         # convert in order
         sm = self.sub_matches[0].convert(current_error_handlers)
         for i in self.sub_matches[1:]:
-            sm.append_after(i.convert(current_error_handlers))
+            sm.append_after(i.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH])
         return sm
 
 class MatchNode(ActionSinkNode):
@@ -2148,7 +2159,7 @@ class MatchNode(ActionSinkNode):
     def convert(self, current_error_handlers: dict):
         base_dfa = self.match.convert(current_error_handlers)
         if self.next is not None:
-            base_dfa.append_after(self.next.convert(current_error_handlers))
+            base_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH])
         return base_dfa
 
 class CaseNode(Node):
@@ -2426,13 +2437,13 @@ class CaseNode(Node):
                         j.attach(*self.case_match_actions[true_backref], prepend=True)
             else:
                 refers_to = sub_dfas[original_backreference[i]]
-                decider_dfa.append_after(refers_to, corresponding_finish_states[i], chain_actions=self.case_match_actions[original_backreference[i]])
+                decider_dfa.append_after(refers_to, current_error_handlers[ErrorReasons.NO_MATCH], sub_states=corresponding_finish_states[i], chain_actions=self.case_match_actions[original_backreference[i]])
 
         ProgramData.imbue(decider_dfa, DebugTag.PARENT, self)
 
         # If we need to, add a boring after thing
         if self.next is not None:
-            decider_dfa.append_after(self.next.convert(current_error_handlers))
+            decider_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH])
         
         return decider_dfa
 
@@ -2472,7 +2483,7 @@ class OptionalNode(ActionSinkNode):
 
         # If we need to, add a boring after thing
         if self.next is not None:
-            sub_dfa.append_after(self.next.convert(current_error_handlers), chain_actions=self.finish_actions)
+            sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH], chain_actions=self.finish_actions)
 
         return sub_dfa
 
@@ -2552,7 +2563,7 @@ class LoopNode(ActionSinkNode, HasDefaultDebugInfo):
             raise IllegalASTStateError("Unreachable states after loop", self.next)
 
         elif should_try_to_append and self.next:
-            sub_dfa.append_after(self.next.convert(current_error_handlers))
+            sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH])
 
         return sub_dfa
 
@@ -2626,7 +2637,7 @@ class TryExceptNode(ActionSinkNode):
         if self.handler is not None:
             handler_dfa = self.handler.convert(current_error_handlers)
             add_finish_to(handler_dfa)
-            sub_dfa.append_after(handler_dfa, sub_states=[self.handler_node], chain_actions=self.incoming_handler_actions)
+            sub_dfa.append_after(handler_dfa, current_error_handlers[ErrorReasons.NO_MATCH], sub_states=[self.handler_node], chain_actions=self.incoming_handler_actions)
         else:
             # Otherwise, just mark the handler as a finish state
             sub_dfa.mark_accepting(self.handler_node)
@@ -2636,7 +2647,7 @@ class TryExceptNode(ActionSinkNode):
 
         # If there is a next node, append it
         if self.next is not None:
-            sub_dfa.append_after(self.next.convert(current_error_handlers))
+            sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH])
 
         return sub_dfa
 
