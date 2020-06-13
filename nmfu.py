@@ -821,7 +821,7 @@ class ProgramData:
             for conflict in flag.exclusive_with:
                 conflict = ProgramFlag(conflict)
                 if conflict in flag_overrides and flag_overrides[conflict]:
-                    raise RuntimeError("Conflict between " + conflict + " and " + flag)
+                    raise RuntimeError("Conflict between " + conflict.name + " and " + flag.name)
                 elif cls._flags[conflict]:
                     # ensure it's set to false, and go through _its_ conflicts
                     cls._flags[conflict] = False
