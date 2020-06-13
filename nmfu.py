@@ -549,6 +549,10 @@ class ProgramFlag(int, enum.Enum):
     ALLOCATE_STR_SPACE_DYNAMIC   = (6, "Allocate string space dynamically", False, (7,), (5,))  # implies DYNAMIC
     ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND = (8, "Allocate string space on demand", False, (6,))  # implies DYNAMIC
     # |
+    # - Hook options
+    HOOK_GLOBAL = (12, "Place hooks as global functions", True)
+    HOOK_PER_STATE = (13, "Place hooks as function pointers in the state structure", False, (), (12,))
+    # |
     # - Template options
     USE_PRAGMA_ONCE = (10, "Use #pragma once instead of an #ifndef guard in the header")
 
@@ -3111,9 +3115,9 @@ class CodegenCtx:
         if ProgramData.do(ProgramFlag.DYNAMIC_MEMORY):
             result.add(f"void {self.program_name}_free({self.program_name}_state_t *state);")
         
-        # add hooks
-        for hook in self.hooks:
-            result.add(f"void {self.program_name}_{hook}_hook({self.program_name}_state_t *state, uint8_t inval);")
+        if ProgramData.do(ProgramFlag.HOOK_GLOBAL):
+            for hook in self.hooks:
+                result.add(f"void {self.program_name}_{hook}_hook({self.program_name}_state_t *state, uint8_t inval);")
 
         if not ProgramData.do(ProgramFlag.USE_PRAGMA_ONCE):
             result.add("#endif")
@@ -3177,6 +3181,12 @@ class CodegenCtx:
                 result += self._generate_out_enum(out_decl)
                 result.add()
 
+        if ProgramData.do(ProgramFlag.HOOK_PER_STATE):
+            # Add a typedef
+            result.add("// hook typedef")
+            result.add(f"struct {self.program_name}_state;")
+            result.add(f"typedef void (*{self.program_name}_hook_t)(struct {self.program_name}_state *, uint8_t);")
+
         result.add("// state object")
         result.add(f"struct {self.program_name}_state", "{")
         with result as contents:
@@ -3196,6 +3206,11 @@ class CodegenCtx:
             # Add a user ptr if desired.
             if ProgramData.do(ProgramFlag.INCLUDE_USER_PTR):
                 contents.add("void * userptr;")
+
+            # Add hooks if desired
+            if ProgramData.do(ProgramFlag.HOOK_PER_STATE):
+                for hook in self.hooks:
+                    contents.add(f"{self.program_name}_hook_t {hook}_hook;")
 
         result.add("};")
         result.add(f"typedef struct {self.program_name}_state {self.program_name}_state_t;")
@@ -3335,10 +3350,13 @@ class CodegenCtx:
                 body.add(f"state->c.{action.into_storage.name}[state->{action.into_storage.name}_counter] = 0;")
             result.add("}")
         elif isinstance(action, CallHook):
-            if is_start:
-                result.add(f"{self.program_name}_{action.name}_hook(state, 0);")
+            parm = "0" if is_start else "inval"
+            if ProgramData.do(ProgramFlag.HOOK_GLOBAL):
+                result.add(f"{self.program_name}_{action.name}_hook(state, {parm});")
+            elif ProgramData.do(ProgramFlag.HOOK_PER_STATE):
+                result.add(f"(state->{action.name}_hook)(state, {parm});")
             else:
-                result.add(f"{self.program_name}_{action.name}_hook(state, inval);")
+                raise IllegalDFAStateError("Attempt to use hook while no hook method is enabled", action)
         return result.value()
 
     def _generate_start_implementation(self):
