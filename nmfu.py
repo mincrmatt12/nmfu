@@ -44,6 +44,7 @@ start: top_decl* parser_decl top_decl*
 
 ?top_decl: out_decl
          | macro_decl
+         | hook_decl
 
 out_decl: "out" out_type IDENTIFIER ";"
         | "out" out_type IDENTIFIER "=" atom ";"
@@ -52,6 +53,8 @@ out_type: "bool" -> bool_type
         | "int" -> int_type
         | "enum" "{" IDENTIFIER ("," IDENTIFIER)+ "}" -> enum_type
         | "str" "[" NUMBER "]" -> str_type
+
+hook_decl: "hook" IDENTIFIER ";"
 
 macro_decl: "macro" IDENTIFIER "{" statement* "}"
 
@@ -951,6 +954,16 @@ class UndefinedReferenceError(NMFUError):
     def __str__(self):
         return f"Undefined reference to {self.objtype} {self.source.value}:\n" + self._get_message(show_potential_reasons=False)
 
+class DuplicateDefinitionError(NMFUError):
+    def __init__(self, objtype, source, name):
+        super().__init__([source])
+        self.objtype = objtype
+        self.source = source
+        self.name = name
+
+    def __str__(self):
+        return f"Duplicate definition of {self.objtype} {self.name}:\n" + self._get_message(show_potential_reasons=False)
+
 
 # =========
 # AST TYPES
@@ -1014,6 +1027,20 @@ class FinishAction(Action, HasDefaultDebugInfo):
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
             return "exit action"
+
+class CallHook(Action, HasDefaultDebugInfo):
+    def __init__(self, name):
+        self.name = name
+
+    def get_mode(self):
+        return ActionMode.AT_FINISH
+
+    def is_timing_strict(self):
+        return True
+
+    def debug_lookup(self, tag: DebugTag):
+        if tag == DebugTag.NAME:
+            return f"call to hook {self.name}"
 
 class BreakAction(Action, HasDefaultDebugInfo):
     def __init__(self, refers_to):
@@ -2622,6 +2649,7 @@ class ParseCtx:
         self._parse_tree = parse_tree
         self.macros = {} # all macros, name --> AST
         self.state_object_spec = {}
+        self.hooks = []
         self.ast = None
         self.start_actions = []
         self.generic_fail_state = DFState()
@@ -2634,11 +2662,20 @@ class ParseCtx:
         # Parse state_object_spec
         for out in self._parse_tree.find_data("out_decl"):
             out_obj = self._parse_out_decl(out)
+            if out_obj.name in self.state_object_spec:
+                raise DuplicateDefinitionError("output variable", out_obj, out_obj.name)
             self.state_object_spec[out_obj.name] = out_obj
         # Parse macros
         for macro in self._parse_tree.find_data("macro_decl"):
             macro_obj = Macro(macro.children[0], macro.children[1:])
+            if macro_obj.name in self.macros:
+                raise DuplicateDefinitionError("macro", macro_obj, macro_obj.name)
             self.macros[macro_obj.name] = macro_obj
+
+        for hook in self._parse_tree.find_data("hook_decl"):
+            if hook.children[0].value in self.hooks:
+                raise DuplicateDefinitionError("hook", hook.children[0], hook.children[0].value)
+            self.hooks.append(hook.children[0].value)
         # Parse main
         parser_decl = next(self._parse_tree.find_data("parser_decl"))
         self.ast = self._parse_stmt_seq(parser_decl.children)
@@ -2856,12 +2893,14 @@ class ParseCtx:
         elif stmt.data == "wait_stmt":
             return MatchNode(WaitMatch(self._parse_match_expr(stmt.children[0])))
         elif stmt.data == "call_stmt":
+            name = stmt.children[0].value
             try:
-                name = stmt.children[0].value
                 return ProgramData.imbue(self._parse_stmt_seq(self.macros[name].parse_tree), DebugTag.PARENT, self.macros[name])
             except KeyError:
-                pass
-            raise UndefinedReferenceError("macro", stmt.children[0])
+                if name in self.hooks:
+                    return ActionNode(ProgramData.imbue(ProgramData.imbue(CallHook(name), DebugTag.SOURCE_LINE, stmt.line), DebugTag.SOURCE_COLUMN, stmt.column))
+                else:
+                    raise UndefinedReferenceError("macro", stmt.children[0])
         elif stmt.data == "finish_stmt":
             act = FinishAction()
             ProgramData.imbue(act, DebugTag.SOURCE_LINE, stmt.line)
@@ -2948,6 +2987,7 @@ class ParseCtx:
 class DfaCompileCtx:
     def __init__(self, parse_ctx: ParseCtx):
         self.state_object_spec = parse_ctx.state_object_spec
+        self.hooks = parse_ctx.hooks
         self.ast = parse_ctx.ast
         self.start_actions = parse_ctx.start_actions
         self.generic_fail_state = parse_ctx.generic_fail_state
@@ -3032,6 +3072,7 @@ class Outputter:
 class CodegenCtx:
     def __init__(self, dfa_compile_ctx: DfaCompileCtx, program_name: str):
         self.start_actions = dfa_compile_ctx.start_actions
+        self.hooks = dfa_compile_ctx.hooks
         self.dfa = dfa_compile_ctx.dfa
         self.state_object_spec: List[OutputStorage] = list(dfa_compile_ctx.state_object_spec.values())
         self.generic_fail_state = dfa_compile_ctx.generic_fail_state
@@ -3069,6 +3110,11 @@ class CodegenCtx:
         result.add(f"{self.program_name}_result_t {self.program_name}_feed(uint8_t inval, bool is_end, {self.program_name}_state_t *state);")
         if ProgramData.do(ProgramFlag.DYNAMIC_MEMORY):
             result.add(f"void {self.program_name}_free({self.program_name}_state_t *state);")
+        
+        # add hooks
+        for hook in self.hooks:
+            result.add(f"void {self.program_name}_{hook}_hook({self.program_name}_state_t *state, uint8_t inval);")
+
         if not ProgramData.do(ProgramFlag.USE_PRAGMA_ONCE):
             result.add("#endif")
 
@@ -3288,6 +3334,11 @@ class CodegenCtx:
                 body.add(f"state->c.{action.into_storage.name}[state->{action.into_storage.name}_counter++] = inval;")
                 body.add(f"state->c.{action.into_storage.name}[state->{action.into_storage.name}_counter] = 0;")
             result.add("}")
+        elif isinstance(action, CallHook):
+            if is_start:
+                result.add(f"{self.program_name}_{action.name}_hook(state, 0);")
+            else:
+                result.add(f"{self.program_name}_{action.name}_hook(state, inval);")
         return result.value()
 
     def _generate_start_implementation(self):
