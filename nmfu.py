@@ -1107,6 +1107,9 @@ class AppendCharTo(Action, HasDefaultDebugInfo):
     def get_target_override_target(self):
         return self.end_target
 
+    def is_timing_strict(self):
+        return True
+
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
             return "append character action ({})".format(ProgramData.lookup(self.into_storage, DebugTag.NAME))
