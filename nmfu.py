@@ -3151,6 +3151,7 @@ class CodegenCtx:
         result.add(f"// source file for nmfu parser {self.program_name}")
         result.add(f"// ============================" + "=" * len(self.program_name))
         result.add(f"#include \"{self.program_name}.h\"")
+        result.add("#include <string.h>")
         if ProgramData.do(ProgramFlag.DYNAMIC_MEMORY):
             result.add("#include <stdlib.h>")
         result.add()
