@@ -3783,6 +3783,9 @@ def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=Non
             if ast.incoming_handler_actions:
                 c.node(make_id(), f"hstart: " + ",".join(label_of(x) for x in ast.incoming_handler_actions), style="filled", color="white")
 
+            if ast.after_actions:
+                c.node(make_id(), f"finish: " + ",".join(label_of(x) for x in ast.after_actions), style="filled", color="white")
+
             if not ast.handles:
                 next_coming_from.append(handler_start)
             else:
