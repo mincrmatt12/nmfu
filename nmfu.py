@@ -20,7 +20,6 @@ GNU General Public License for more details.
 
 __version__ = "0.1.1"
 
-import lark
 import abc
 import enum
 import string
@@ -30,6 +29,20 @@ import io
 import textwrap
 import os
 import sys
+try:
+    import lark
+except ImportError:
+    print("... failed to import lark; must be in setup.py ...", file=sys.stderr)
+    # Mock it
+    class lark:
+        Token = None
+        Tree = None
+        
+        @staticmethod
+        def Lark(*args, **kwargs):
+            return None
+        
+        LarkError = RuntimeError
 from collections import defaultdict
 from typing import List, Optional, Iterable, Dict, Union, Set
 try:
