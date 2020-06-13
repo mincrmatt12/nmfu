@@ -397,13 +397,10 @@ class DFA:
             condition_states = [defaultdict(lambda: False) for x in actions]
 
         position = self.starting_state
-        print('0')
         for action, _ in zip(actions, condition_states):
             # TODO: conditions
             try:
-                print(position[action])
                 position = position[action].target
-                print(self.states.index(position))
             except AttributeError:
                 return None
             else:
@@ -760,6 +757,7 @@ class ProgramData:
         flag_overrides = {}
 
         all_cmd_options_iter = iter(all_cmd_options)
+        cls.dump_prefix = None
 
         for option in all_cmd_options_iter:
             if not option:
