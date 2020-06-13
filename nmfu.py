@@ -2998,7 +2998,14 @@ class ParseCtx:
         next_node = None
         for stmt in reversed(stmts):
             node = self._parse_stmt(stmt)
-            node.set_next(next_node)
+            if node.get_next() is not None:
+                # We need to find the actual end
+                end_node = node
+                while end_node.get_next() is not None:
+                    end_node = end_node.get_next()
+                end_node.set_next(next_node)
+            else:
+                node.set_next(next_node)
             next_node = node
         return next_node
 
