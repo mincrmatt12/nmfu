@@ -1092,6 +1092,25 @@ class AppendTo(Action, HasDefaultDebugInfo):
         if tag == DebugTag.NAME:
             return "append action ({})".format(ProgramData.lookup(self.into_storage, DebugTag.NAME))
 
+class AppendCharTo(Action, HasDefaultDebugInfo):
+    def __init__(self, end_target, append_value: "IntegerExpr", into_storage: "OutputStorage"):
+        self.end_target = end_target
+        self.append_value = append_value
+        self.into_storage = into_storage
+
+    def get_mode(self):
+        return ActionMode.AT_FINISH
+
+    def get_target_override_mode(self):
+        return ActionOverrideMode.MAY_GOTO_TARGET
+
+    def get_target_override_target(self):
+        return self.end_target
+
+    def debug_lookup(self, tag: DebugTag):
+        if tag == DebugTag.NAME:
+            return "append character action ({})".format(ProgramData.lookup(self.into_storage, DebugTag.NAME))
+
 class SetTo(Action, HasDefaultDebugInfo):
     def __init__(self, value_expr: "IntegerExpr", into_storage: "OutputStorage"):
         self.into_storage = into_storage
@@ -2870,6 +2889,10 @@ class ParseCtx:
         targeted = self.state_object_spec[targeted]
 
         if targeted.type == OutputStorageType.STR and is_append:
+            # Check if this is a math expression (only valid append type other than match)
+            if stmt.children[1].data in ["math_num", "math_var", "builtin_math_var", "sum_expr", "mul_expr"]:
+                # Create an AppendCharTo action
+                return ActionNode(AppendCharTo(self.exception_handlers[ErrorReasons.OUT_OF_SPACE], self._parse_math_expr(stmt.children[1]), targeted))
             # Create an append expression
             match_node = MatchNode(self._parse_match_expr(stmt.children[1]))
             match_node.match.attach(AppendTo(self.exception_handlers[ErrorReasons.OUT_OF_SPACE], targeted))
@@ -3357,7 +3380,7 @@ class CodegenCtx:
                     result.add(f"if (!state->c.{action.into_storage.name}) state->c.{action.into_storage.name} = malloc({action.into_storage.str_size});")
             result.add(self._generate_set_string(action.value_expr, action.into_storage))
             result.add(f"state->{action.into_storage.name}_counter = {len(action.value_expr)};")
-        elif isinstance(action, AppendTo):
+        elif isinstance(action, (AppendTo, AppendCharTo)):
             # Check if we need to allocate
             if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND) and action.into_storage.default_value is None:  # if it wasn't None it'd be allocated in the start()
                 result.add(f"if (!state->c.{action.into_storage.name}) state->c.{action.into_storage.name} = malloc({action.into_storage.str_size});")
@@ -3367,7 +3390,10 @@ class CodegenCtx:
             result.add(f"if (state->{action.into_storage.name}_counter == {action.into_storage.str_size-1}) state->state = {self.dfa.states.index(action.end_target)};")
             result.add("else {")
             with result as body:
-                body.add(f"state->c.{action.into_storage.name}[state->{action.into_storage.name}_counter++] = inval;")
+                target_expression = "inval" if isinstance(action, AppendTo) else self._generate_code_for_int_expr(
+                    action.append_value, IntegerExprUseContext.ASSIGN_INITIAL if is_start else IntegerExprUseContext.ASSIGN_ON_MATCH, OutputStorage(OutputStorageType.INT, "$appendctx")
+                )
+                body.add(f"state->c.{action.into_storage.name}[state->{action.into_storage.name}_counter++] = (char)({target_expression});")
                 body.add(f"state->c.{action.into_storage.name}[state->{action.into_storage.name}_counter] = 0;")
             result.add("}")
         elif isinstance(action, CallHook):
