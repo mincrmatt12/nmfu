@@ -3269,7 +3269,6 @@ class CodegenCtx:
             raise IllegalIntExpr("Illegal use of integer expression in context {}".format(ctx.name), intexpr)
 
         if intexpr.result_type() != out_expr.type:
-            print(out_expr, intexpr)
             raise IllegalIntExpr("Mismatched types for target storage", intexpr)
 
         if isinstance(intexpr, LiteralIntegerExpr):
