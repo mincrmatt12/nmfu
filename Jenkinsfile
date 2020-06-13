@@ -5,7 +5,7 @@ pipeline {
 	stages {
 		stage ('Build') {
 			steps {
-				sh 'python setup.py egg_info --tag-build "dev0+git-${env.GIT_COMMIT}" sdist bdist_wheel'
+				sh "python setup.py egg_info --tag-build 'dev0+git-${env.GIT_COMMIT}' sdist bdist_wheel"
 				archiveArtifacts artifacts: 'dist/*'
 			}
 		}
