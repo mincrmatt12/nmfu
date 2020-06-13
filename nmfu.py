@@ -539,12 +539,14 @@ class ProgramFlag(int, enum.Enum):
     # |
     # - Structure options
     DYNAMIC_MEMORY = 7  # Allow use of dynamic memory
+    INCLUDE_USER_PTR = (11, "Add a void* to the state structure, useful with hooks")
     # |
     # - String storage options
     ALLOCATE_STR_SPACE_IN_STRUCT = (5, "Allocate string space in struct", True, (), (6,))  # allocate the string space in the struct as an array, default
     ALLOCATE_STR_SPACE_DYNAMIC   = (6, "Allocate string space dynamically", False, (7,), (5,))  # implies DYNAMIC
     ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND = (8, "Allocate string space on demand", False, (6,))  # implies DYNAMIC
-
+    # |
+    # - Template options
     USE_PRAGMA_ONCE = (10, "Use #pragma once instead of an #ifndef guard in the header")
 
 class ProgramOption(enum.Enum):
@@ -3144,6 +3146,10 @@ class CodegenCtx:
                     contents.add(self._integer_containing(out_str.str_size, signed=False), f"{out_str.name}_counter;")
 
             contents.add(self._integer_containing(len(self.dfa.states), signed=False), "state;")
+
+            # Add a user ptr if desired.
+            if ProgramData.do(ProgramFlag.INCLUDE_USER_PTR):
+                contents.add("void * userptr;")
 
         result.add("};")
         result.add(f"typedef struct {self.program_name}_state {self.program_name}_state_t;")
