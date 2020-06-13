@@ -224,8 +224,11 @@ class DFTransition:
         self.conditions.extend(conditions)
         return self
 
-    def attach(self, *actions):
-        self.actions.extend(actions)
+    def attach(self, *actions, prepend=False):
+        if prepend:
+            self.actions = list(actions) + self.actions
+        else:
+            self.actions.extend(actions)
         return self
     
     def to(self, target):
@@ -481,7 +484,7 @@ class DFA:
                     if not chain_actions:
                         sub_state.transition(transition.copy(), DFTransition.Else in transition.on_values)
                     else:
-                        sub_state.transition(transition.copy().attach(*chain_actions), DFTransition.Else in transition.on_values)
+                        sub_state.transition(transition.copy().attach(*chain_actions, prepend=True), DFTransition.Else in transition.on_values)
                 except IllegalDFAStateError as e:
                     # Rewrite the error as something more useful
                     raise IllegalDFAStateConflictsError("Ambigious transitions detected while joining matches", sub_state, chained_dfa.starting_state) from e
@@ -2407,7 +2410,7 @@ class CaseNode(Node):
                 decider_dfa.mark_accepting(new_state)
                 decider_dfa.add(new_state)
                 for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
-                    trans.to(new_state).attach(*else_actions)
+                    trans.to(new_state).attach(*else_actions, prepend=True)
 
         # Go through and link up all the states
         for i in mergeable_ds:
@@ -2420,7 +2423,7 @@ class CaseNode(Node):
                         raise IllegalDFAStateError("Unable to schedule strict finish action for case", i)
                     # Add actions
                     for j in all_transitions_empty:
-                        j.attach(*self.case_match_actions[true_backref])
+                        j.attach(*self.case_match_actions[true_backref], prepend=True)
             else:
                 refers_to = sub_dfas[original_backreference[i]]
                 decider_dfa.append_after(refers_to, corresponding_finish_states[i], chain_actions=self.case_match_actions[original_backreference[i]])
