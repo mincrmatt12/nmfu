@@ -2372,6 +2372,8 @@ class CaseNode(Node):
             if DFTransition.Else in actual_else:
                 # just use it
                 actual_else = set((DFTransition.Else,))
+            elif DFTransition.Else in flat_local_alphabet:
+                continue # Ignore it because else will
             
             if actual_else: # sometimes you actually don't need one
                 converted_states[processing].transition(DFTransition(list(actual_else)).to(treat_as_else), allow_replace=True)
