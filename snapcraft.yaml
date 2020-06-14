@@ -2,8 +2,9 @@ name: nmfu
 version: git
 summary: A parser generator
 description: A parser generator
-grade: devel
-confinement: devmode
+grade: stable
+
+confinement: strict
 base: core18
 
 parts:
@@ -15,3 +16,4 @@ parts:
 apps:
     nmfu:
         command: bin/nmfu
+        plugs: [home, removable-media]
