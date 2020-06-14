@@ -50,7 +50,7 @@ def test_merge_with_regexes(re_matches):
 
 @given(st.one_of(st.from_regex(x, fullmatch=True) for x in DISJOINT_EXAMPLES))
 @settings(max_examples=500)
-@example("tfa")  # this caused a bug before version 0.2.0
+@example(b"tfa")  # this caused a bug before version 0.2.0
 def test_valid_end_states(input_str):
     obj = nmfu.CaseNode({})
     vals = {x: x.convert(defaultdict(lambda: None)) for x in DISJOINT_EXAMPLES.values()}
