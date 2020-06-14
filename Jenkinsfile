@@ -17,7 +17,6 @@ pipeline {
 				}
 			}
 			steps {
-				sh "pip install .[tests]"
 				sh "pytest --junit-xml=junit.xml"
 				junit 'junit.xml'
 			}
