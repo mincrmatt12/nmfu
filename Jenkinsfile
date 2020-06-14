@@ -20,5 +20,14 @@ pipeline {
 				junit 'junit.xml'
 			}
 		}
+		stage ('Snipsnap') {
+			agent {
+				docker { image 'snapcore/snapcraft' }
+				steps {
+					sh "snapcraft"
+					archiveArtifacts artifacts: "*.snap"
+				}
+			}
+		}
 	}
 }
