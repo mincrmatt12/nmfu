@@ -1,11 +1,12 @@
 pipeline {
 	agent {
-		dockerfile {
-			filename 'Dockerfile.build'
-		}
+		label 'docker && linux';
 	}
 	stages {
 		stage ('Build') {
+			agent {
+				docker { image 'python:3' }
+			}
 			environment {
 				TAG_BUILD = """${sh(returnStdout: true, script: 'bash -c "[[ \\$TAG_NAME ]] && true || echo dev0+git-${GIT_COMMIT}"').trim()}"""
 			}
@@ -15,6 +16,11 @@ pipeline {
 			}
 		}
 		stage ('Test') {
+			agent {
+				dockerfile {
+					filename 'Dockerfile.build'
+				}
+			}
 			steps {
 				sh "pytest --junit-xml=junit.xml || true"
 				junit 'junit.xml'
