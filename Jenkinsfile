@@ -14,7 +14,7 @@ pipeline {
 				}
 			}
 			environment {
-				TAG_BUILD = """${sh(returnStdout: true, script: 'bash -c "[[ \\$TAG_NAME ]] && echo ' ' || echo -n dev0+git-${GIT_COMMIT}"')}"""
+				TAG_BUILD = """${sh(returnStdout: true, script: 'bash -c "[[ \\$TAG_NAME ]] && echo \' \' || echo -n dev0+git-${GIT_COMMIT}"')}"""
 			}
 			steps {
 				sh "rm dist/* || true"
