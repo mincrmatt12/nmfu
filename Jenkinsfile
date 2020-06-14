@@ -11,6 +11,11 @@ pipeline {
 		}
 
 		stage ('Test') {
+			agent {
+				dockerfile {
+					filename 'Dockerfile.test'
+				}
+			}
 			steps {
 				sh "pip install .[tests]"
 				sh "pytest --junit-xml=junit.xml"
