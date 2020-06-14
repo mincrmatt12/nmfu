@@ -30,13 +30,13 @@ pipeline {
 				junit 'junit.xml'
 			}
 		}
-		stage ('Snipsnap') {
+		stage ('Snapify') {
 			agent {
-				label "blubber";
+				label "scala"
 			}
 			steps {
 				sh "snapcraft --use-lxd"
-				archiveArtifacts artifacts: "*.snap"
+				archiveArtifacts artifacts: '*.snap'
 			}
 		}
 	}
