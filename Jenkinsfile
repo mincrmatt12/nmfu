@@ -1,7 +1,7 @@
 pipeline {
 	agent {
 		dockerfile {
-			filename 'Dockerfile.test'
+			filename 'Dockerfile.build'
 		}
 	}
 	stages {
@@ -13,7 +13,7 @@ pipeline {
 		}
 		stage ('Test') {
 			steps {
-				sh "pytest --junit-xml=junit.xml"
+				sh "pytest --junit-xml=junit.xml || true"
 				junit 'junit.xml'
 			}
 		}
