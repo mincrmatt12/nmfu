@@ -1,6 +1,8 @@
 pipeline {
 	agent {
-		docker { image 'python:3' }
+		dockerfile {
+			filename 'Dockerfile.test'
+		}
 	}
 	stages {
 		stage ('Build') {
@@ -10,11 +12,6 @@ pipeline {
 			}
 		}
 		stage ('Test') {
-			agent {
-				dockerfile {
-					filename 'Dockerfile.test'
-				}
-			}
 			steps {
 				sh "pytest --junit-xml=junit.xml"
 				junit 'junit.xml'
