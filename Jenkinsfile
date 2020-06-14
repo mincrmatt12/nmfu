@@ -1,10 +1,11 @@
 pipeline {
 	agent {
-		label 'docker && linux';
+		label "docker && linux"
 	}
 	stages {
 		stage ('Build') {
 			agent {
+				label "docker && linux"
 				docker { image 'python:3' }
 			}
 			environment {
@@ -18,6 +19,7 @@ pipeline {
 		stage ('Test') {
 			agent {
 				dockerfile {
+					label "docker && linux"
 					filename 'Dockerfile.build'
 				}
 			}
@@ -28,6 +30,7 @@ pipeline {
 		}
 		stage ('Snipsnap') {
 			agent {
+				label "docker && linux"
 				docker { image 'snapcore/snapcraft' }
 			}
 			steps {
