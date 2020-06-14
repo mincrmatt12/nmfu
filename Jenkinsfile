@@ -20,8 +20,5 @@ pipeline {
 				junit 'junit.xml'
 			}
 		}
-		stage ('Deploy') {
-			
-		}
 	}
 }
