@@ -25,7 +25,7 @@ NMFU source files support C-style line comments (text after `//` on a line is ig
 
 ### Top-Level Constructs
 
-At the top-level, all NMFU parsers consist of a set of output-variables, macro-definitions and the parser code itself.
+At the top-level, all NMFU parsers consist of a set of output-variables, macro-definitions, hook-definitions and the parser code itself.
 
 The output-variables are specified with the _output-declaration_:
 
@@ -70,8 +70,19 @@ macro ows() { // optional white space
 ```
 
 When macros are "called", or instantiated, all NMFU does is copy the contents of the parse tree from the macro
-declaration to the call-site. Note that although macros can call other macros, they cannot recurse or refer to macros
-defined after them in the source file.
+declaration to the call-site. Note that although macros can call other macros, they cannot recurse.
+
+Hooks (which are callbacks to user code which the parser can call at certain points) are defined with a _hook-declaration_:
+
+```
+hook_decl: "hook" IDENTIFIER ";"
+```
+
+For example:
+
+```
+hook got_header;
+```
 
 ### Parser Declaration
 
@@ -100,10 +111,13 @@ simple_stmt: expr -> match_stmt
 The most basic form of statement in NMFU is a _match-statement_, which matches any _match-expression_ (explained in the next section).
 
 The next two statements are the _assign-statement_ and _append_statement_. The _assign-statement_ parses an _integer-expression_ (which are not limited to just integers, again explained in the next section).
-and assigns its result into the named _output-variable_. The _append-statement_ instead appends whatever is matched by the _match-expression_ into the named _output-variable_ which must by a string type.
+and assigns its result into the named _output-variable_. The _append-statement_ instead appends whatever is matched by the _match-expression_ into the named _output-variable_ which must by a string type. Additionally,
+if the argument to an _append-statement_ is a _math-expression_, then the result of evaluating the expression will be treated as a character code and appended to the string.
 
-The _call-stmt_ instantiates a macro. Note that there is currently no valid way to pass parameters to them, and as such the expressions provided
-will be ignored, although may in future be used as C-style macro arguments.
+The _call-stmt_ instantiates a macro or calls a hook. Note that there is currently no valid way to pass parameters to either, and as such the expressions provided
+will be ignored, although may in future be used as C-style macro arguments or passed to the underlying hook function.
+
+If a hook and macro have the same name, the macro will take priority.
 
 The _break-statement_ is explained along with loops in a later section.
 
@@ -168,7 +182,7 @@ The current list of _builtin-math-variables_ is:
 
 | Name | Meaning |
 | ---- | ------- |
-| `last` | The codepoint of the last matched character. Useful for interpreting numbers in input streams |
+| `last` | The codepoint of the last matched character. Useful for interpreting numbers in input streams. |
 
 For example:
 
@@ -353,6 +367,15 @@ typedef struct http_state http_state_t;
 
 Additional enumeration types for every declared enum _output-variable_ are also generated, using the name `{parser_name}_out_{out_var_name}_t`. The names
 of the constants use, in all-capitals, `{parser_name}_{out_var_name}_{enum_constant}`; for example `HTTP_RESULT_URLL`.
+
+If hooks were used, they are either declared (but not implemented) as functions with the signature
+
+```
+void {parser_name}_{hook_name}_hook({parser_name}_state_t * state, uint8_t last_inval);
+```
+
+or added as members to the state object as function pointers (with the same signature, typedef'd as `{parser_name}_hook_t`) with the name `{hook_name}_hook` outside
+of the `c` sub-struct, depending on command line options.
 
 One additional enumeration is always defined, called `{parser_name}_result_t` which contains the various result codes from NMFU-generated functions.
 These contain the values `{parser_name}_DONE`, `{parser_name}_OK` and `{parser_name}_FAIL`, for example `HTTP_OK`.
