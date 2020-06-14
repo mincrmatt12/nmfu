@@ -37,17 +37,20 @@ pipeline {
 		}
 		stage ('Snapify') {
 			agent {
-				docker { 
+				dockerfile { 
 					image 'snapcore/snapcraft' 
 					label "docker && linux"
+					args '-u root:root'
 				}
 			}
 			steps {
 				// clean out previously built snaps
 				sh "rm *.snap || true"
-				sh "snapcraft snap -o nmfu.snap"
+				sh "snapcraft snap"
+				sh "chmod 777 *.snap"
 				archiveArtifacts artifacts: 'nmfu.snap'
 				stash includes: 'nmfu.snap', name: 'snapped'
+				sh "rm *.snap || true"
 			}
 		}
 		stage('Deploy') {
