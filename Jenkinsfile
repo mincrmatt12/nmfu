@@ -91,7 +91,7 @@ pipeline {
 					steps {
 						unstash name: 'snapped'
 						sh "snapcraft login --with $SNAP_LOGIN_FILE"
-						sh "snapcraft upload --release=$SNAPCRAFT_RELEASE_CHANNEL *.snap"
+						sh "snapcraft upload --release $SNAPCRAFT_RELEASE_CHANNEL *.snap"
 					}
 				}
 			}
