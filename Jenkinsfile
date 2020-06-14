@@ -32,10 +32,7 @@ pipeline {
 		}
 		stage ('Snipsnap') {
 			agent {
-				docker { 
-					label "docker && linux"
-					image 'snapcore/snapcraft' 
-				}
+				label "blubber";
 			}
 			steps {
 				sh "snapcraft"
