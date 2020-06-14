@@ -37,12 +37,15 @@ pipeline {
 		}
 		stage ('Snapify') {
 			agent {
-				label "scala"
+				docker { 
+					image 'snapcore/snapcraft' 
+					label "docker && linux"
+				}
 			}
 			steps {
 				// clean out previously built snaps
 				sh "rm *.snap || true"
-				sh "snapcraft snap --use-lxd -o nmfu.snap"
+				sh "snapcraft snap -o nmfu.snap"
 				archiveArtifacts artifacts: 'nmfu.snap'
 				stash includes: 'nmfu.snap', name: 'snapped'
 			}
