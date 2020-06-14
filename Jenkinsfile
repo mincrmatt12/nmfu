@@ -41,11 +41,13 @@ pipeline {
 			}
 			steps {
 				// clean out previously built snaps
-				sh "rm *.snap || true"
-				sh "snapcraft clean"
-				sh "snapcraft snap --use-lxd"
-				archiveArtifacts artifacts: '*.snap'
-				stash includes: '*.snap', name: 'snapped'
+				lock('snapcraft-scala-nmfu') {
+					sh "rm *.snap || true"
+					sh "snapcraft clean"
+					sh "snapcraft snap --use-lxd"
+					archiveArtifacts artifacts: '*.snap'
+					stash includes: '*.snap', name: 'snapped'
+				}
 			}
 		}
 		stage('Deploy') {
