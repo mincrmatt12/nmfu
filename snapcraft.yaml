@@ -1,0 +1,17 @@
+name: nmfu
+version: git
+summary: A parser generator
+description: A parser generator
+grade: devel
+confinement: devmode
+base: core18
+
+parts:
+    nmfu:
+        plugin: python
+        python-version: python3
+        source: .
+
+apps:
+    nmfu:
+        command: bin/nmfu
