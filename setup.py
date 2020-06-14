@@ -34,7 +34,8 @@ setup(
         },
 
         extras_require={
-            "debug": ["graphviz==0.14"]
+            "debug": ["graphviz==0.14"],
+            "tests": ["pytest", "hypothesis"]
         },
         python_requires="~=3.6",
         
