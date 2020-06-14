@@ -42,9 +42,9 @@ pipeline {
 			steps {
 				// clean out previously built snaps
 				sh "rm *.snap || true"
-				sh "snapcraft --use-lxd"
-				archiveArtifacts artifacts: '*.snap'
-				stash includes: '*.snap', name: 'snapped'
+				sh "snapcraft snap --use-lxd -o nmfu.snap"
+				archiveArtifacts artifacts: 'nmfu.snap'
+				stash includes: 'nmfu.snap', name: 'snapped'
 			}
 		}
 		stage('Deploy') {
