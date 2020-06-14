@@ -5,8 +5,10 @@ pipeline {
 	stages {
 		stage ('Build') {
 			agent {
-				label "docker && linux"
-				docker { image 'python:3' }
+				docker { 
+					image 'python:3' 
+					label "docker && linux"
+				}
 			}
 			environment {
 				TAG_BUILD = """${sh(returnStdout: true, script: 'bash -c "[[ \\$TAG_NAME ]] && true || echo dev0+git-${GIT_COMMIT}"').trim()}"""
@@ -30,8 +32,10 @@ pipeline {
 		}
 		stage ('Snipsnap') {
 			agent {
-				label "docker && linux"
-				docker { image 'snapcore/snapcraft' }
+				docker { 
+					label "docker && linux"
+					image 'snapcore/snapcraft' 
+				}
 			}
 			steps {
 				sh "snapcraft"
