@@ -37,7 +37,7 @@ pipeline {
 		}
 		stage ('Snapify') {
 			agent {
-				dockerfile { 
+				docker { 
 					image 'snapcore/snapcraft' 
 					label "docker && linux"
 					args '-u root:root'
@@ -45,6 +45,7 @@ pipeline {
 			}
 			steps {
 				// clean out previously built snaps
+				sh "apt-get update"
 				sh "rm *.snap || true"
 				sh "snapcraft snap"
 				sh "chmod 777 *.snap"
