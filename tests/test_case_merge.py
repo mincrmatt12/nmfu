@@ -5,7 +5,7 @@ and input values to make sure the case match doesn't lose anything
 
 import nmfu
 import itertools
-from hypothesis import given
+from hypothesis import given, settings, example
 import hypothesis.strategies as st
 import pytest
 from collections import defaultdict
@@ -49,6 +49,8 @@ def test_merge_with_regexes(re_matches):
     obj._merge([DISJOINT_EXAMPLES[x].convert(defaultdict(lambda: None)) for x in re_matches], None)
 
 @given(st.one_of(st.from_regex(x, fullmatch=True) for x in DISJOINT_EXAMPLES))
+@settings(max_examples=500)
+@example("tfa")  # this caused a bug before version 0.2.0
 def test_valid_end_states(input_str):
     obj = nmfu.CaseNode({})
     vals = {x: x.convert(defaultdict(lambda: None)) for x in DISJOINT_EXAMPLES.values()}
