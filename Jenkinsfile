@@ -35,7 +35,7 @@ pipeline {
 				label "blubber";
 			}
 			steps {
-				sh "/snap/bin/snapcraft"
+				sh "snapcraft --use-lxd"
 				archiveArtifacts artifacts: "*.snap"
 			}
 		}
