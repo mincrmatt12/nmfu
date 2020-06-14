@@ -43,7 +43,7 @@ pipeline {
 				// clean out previously built snaps
 				lock('snapcraft-scala-nmfu') {
 					sh "rm *.snap || true"
-					sh "snapcraft clean"
+					sh "snapcraft clean --use-lxd"
 					sh "snapcraft snap --use-lxd"
 					archiveArtifacts artifacts: '*.snap'
 					stash includes: '*.snap', name: 'snapped'
