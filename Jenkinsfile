@@ -71,7 +71,7 @@ pipeline {
 						label "scala"
 					}
 					environment {
-						SNAP_LOGIN_FILE = credentials('snap-login')
+						SNAP_LOGIN_FILE = credentials('snapcraft-login')
 					}
 					steps {
 						// clean out previously built snaps
