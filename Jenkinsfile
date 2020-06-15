@@ -35,21 +35,6 @@ pipeline {
 				junit 'junit.xml'
 			}
 		}
-		stage ('Snapify') {
-			agent {
-				label "scala"
-			}
-			steps {
-				// clean out previously built snaps
-				lock('snapcraft-scala-nmfu') {
-					sh "rm *.snap || true"
-					sh "snapcraft clean --use-lxd"
-					sh "snapcraft snap --use-lxd"
-					archiveArtifacts artifacts: '*.snap'
-					stash includes: '*.snap', name: 'snapped'
-				}
-			}
-		}
 		stage('Deploy') {
 			when {
 				beforeInput true
@@ -89,7 +74,13 @@ pipeline {
 						SNAP_LOGIN_FILE = credentials('snap-login')
 					}
 					steps {
-						unstash name: 'snapped'
+						// clean out previously built snaps
+						lock('snapcraft-scala-nmfu') {
+							sh "rm *.snap || true"
+							sh "snapcraft clean --use-lxd"
+							sh "snapcraft snap --use-lxd"
+							archiveArtifacts artifacts: '*.snap'
+						}
 						sh "snapcraft login --with $SNAP_LOGIN_FILE"
 						sh "snapcraft upload --release $SNAPCRAFT_RELEASE_CHANNEL *.snap"
 					}
