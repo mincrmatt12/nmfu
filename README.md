@@ -5,7 +5,7 @@ _the "no memory for you" "parser" generator_
 
 ---
 
-![PyPI - License](https://img.shields.io/pypi/l/nmfu) [![PyPI](https://img.shields.io/pypi/v/nmfu)](https://pypi.org/project/nmfu) ![PyPI - Python Version](https://img.shields.io/pypi/pyversions/nmfu)
+![PyPI - License](https://img.shields.io/pypi/l/nmfu) [![PyPI](https://img.shields.io/pypi/v/nmfu)](https://pypi.org/project/nmfu) ![PyPI - Python Version](https://img.shields.io/pypi/pyversions/nmfu) [![Jenkins](https://img.shields.io/jenkins/build?jobUrl=https%3A%2F%2Fjenkins.mm12.xyz%2Fjenkins%2Fjob%2Fnmfu%2Fjob%2Fmaster)](https://jenkins.mm12.xyz/job/nmfu) ![Jenkins tests](https://img.shields.io/jenkins/tests?compact_message&jobUrl=https%3A%2F%2Fjenkins.mm12.xyz%2Fjenkins%2Fjob%2Fnmfu%2Fjob%2Fmaster)
 
 `nmfu` attempts to turn a parser specified as a procedural matching thing into a state machine. It's much more obvious what it
 does if you read some of the examples.
