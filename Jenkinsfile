@@ -45,7 +45,7 @@ pipeline {
 				message 'Release this version of NMFU?'
 				ok 'Yes, do it!' 
 				parameters {
-					choice(choices: ['release', 'candidate', 'beta'], description: 'Which release channel should the snap be sent to?', name: 'SNAPCRAFT_RELEASE_CHANNEL')
+					choice(choices: ['stable', 'candidate', 'beta'], description: 'Which release channel should the snap be sent to?', name: 'SNAPCRAFT_RELEASE_CHANNEL')
 					choice(choices: ['pypi', 'testpypi'], description: 'Which registry should the package be sent to?', name: 'PYPI_REPOSITORY_NAME')
 				}
 				submitter 'matthew'
