@@ -579,6 +579,7 @@ class ProgramFlag(int, enum.Enum):
     # |
     # - Template options
     USE_PRAGMA_ONCE = (10, "Use #pragma once instead of an #ifndef guard in the header")
+    USE_CPLUSPLUS_GUARD = (14, "Include a __cplusplus extern C guard", True)
 
 class ProgramOption(enum.Enum):
     def __init__(self, default, helpstr):
@@ -3157,6 +3158,11 @@ class CodegenCtx:
         result.add(f"// ============================" + "=" * len(self.program_name))
         result.add()
 
+        if ProgramData.do(ProgramFlag.USE_CPLUSPLUS_GUARD):
+            result.add("#ifdef __cplusplus")
+            result.add("extern \"C\" {")
+            result.add("#endif")
+
         result += self._generate_state_object_decl()
 
         result.add()
@@ -3178,6 +3184,11 @@ class CodegenCtx:
         if ProgramData.do(ProgramFlag.HOOK_GLOBAL):
             for hook in self.hooks:
                 result.add(f"void {self.program_name}_{hook}_hook({self.program_name}_state_t *state, uint8_t inval);")
+
+        if ProgramData.do(ProgramFlag.USE_CPLUSPLUS_GUARD):
+            result.add("#ifdef __cplusplus")
+            result.add("}")
+            result.add("#endif")
 
         if not ProgramData.do(ProgramFlag.USE_PRAGMA_ONCE):
             result.add("#endif")
