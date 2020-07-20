@@ -23,6 +23,7 @@ macro ows {
 }
 
 parser { // declare the actual parser
+	result = BADR;
 
     // Each "statement" here is an instruction to the parser. They are followed sequentially.
 

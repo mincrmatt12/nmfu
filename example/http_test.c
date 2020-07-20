@@ -5,13 +5,14 @@
 int main(int argc, char ** argv) {
 	http_state_t state;
 	http_start(&state);
+	http_result_t code;
 
 	while (true) {
 		char c = getchar();
 		if (c == '\n') {
 			http_feed('\r', false, &state);
 		}
-		http_result_t code;
+		if (c == EOF) break;
 		printf("input %c\n", c);
 		printf("return code %d, ", code = http_feed((uint8_t)c, false, &state));
 		printf("state %d\n", state.state);
@@ -42,7 +43,7 @@ end:
 		puts("");
 		puts("too long (etag)");
 	}
-	else if (state.c.result == HTTP_RESULT_BADR) {
+	else if (state.c.result == HTTP_RESULT_BADR || state.c.result == HTTP_RESULT_BADM) {
 		puts("HTTP/1.1 400 Bad Request");
 		puts("Content-Length: 11");
 		puts("Content-Type: text/plain");
