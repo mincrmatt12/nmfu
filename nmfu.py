@@ -3869,7 +3869,7 @@ def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=Non
 
             if not ast.handles:
                 next_coming_from.append(handler_start)
-            else:
+            elif ast.handler is not None:
                 next_coming_from.extend(debug_dump_ast(ast.handler, into=c, coming_from=[handler_start], make_id=make_id, make_subgraph=make_subgraph))
 
             coming_from = next_coming_from
