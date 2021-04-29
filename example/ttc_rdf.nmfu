@@ -29,7 +29,10 @@ parser {
 
     loop rdf_body {
         case {
-            else -> {}
+            else -> {
+				// explicitly read that character
+				/./;
+			}
             /<\s*channel/ -> {wait "</channel>";}
             /<\s*image/ -> {wait "</image>";}
             /<\s*item/ -> {
@@ -42,7 +45,7 @@ parser {
 
                 loop item_body {
                     case {
-                        else -> {}
+                        else -> {/./;}
                         "</item>" -> {break item_body;}
                         "<title>" -> {wait "</title>";}
                         "<link>" -> {wait "</link>";}

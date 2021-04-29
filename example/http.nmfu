@@ -95,9 +95,9 @@ parser { // declare the actual parser
                     // try and find "gzip" in a comma separated list
                     loop {
                         case {
-                            "gzip" -> {accept_gzip = true;}
+                            /\ *gzip/ -> {accept_gzip = true;}
                             "\r\n" -> {break;}
-                            else -> {}
+                            else -> {wait ",";}
                         }
                     }
                 }
