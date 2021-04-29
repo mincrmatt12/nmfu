@@ -201,7 +201,7 @@ class DFTransition:
     Else = type('_DFElse', (), {'__repr__': lambda x: "Else"})()
     End = type('_DFEnd', (), {'__repr__': lambda x: "End"})()
 
-    def __init__(self, on_values=None, conditions=None):
+    def __init__(self, on_values=None, conditions=None, fallthrough=False):
         if conditions is None:
             self.conditions = []
         else:
@@ -217,6 +217,7 @@ class DFTransition:
 
         self.on_values = on_values
         self.target = None
+        self.is_fallthrough = fallthrough
         self.actions = []
 
     def copy(self):
@@ -225,13 +226,14 @@ class DFTransition:
         my_copy.conditions = self.conditions.copy()
         my_copy.actions = self.actions.copy()
         my_copy.target = self.target
+        my_copy.is_fallthrough = self.is_fallthrough
         return my_copy
 
     def __repr__(self):
         if self.actions:
-            return f"<DFTransition on={self.on_values} to={self.target} actions={self.actions}>"
+            return f"<DFTransition on={self.on_values} to={self.target} actions={self.actions} fallthough={self.is_fallthrough}>"
         else:
-            return f"<DFTransition on={self.on_values} to={self.target}>"
+            return f"<DFTransition on={self.on_values} to={self.target} fallthough={self.is_fallthrough}>"
 
     def restrict(self, *conditions):
         self.conditions.extend(conditions)
@@ -249,6 +251,10 @@ class DFTransition:
             self.target = DFState.all_states[target]
         else:
             self.target = target
+        return self
+
+    def fallthrough(self, fall=True):
+        self.is_fallthrough = fall
         return self
 
     @classmethod
@@ -289,7 +295,7 @@ class DFState:
 
         # Check if we can "inline" this transition
         for transition_in in self.transitions:
-            if transition_in.conditions == transition.conditions and transition_in.actions == transition.actions and transition_in.target == transition.target:
+            if transition_in.conditions == transition.conditions and transition_in.actions == transition.actions and transition_in.target == transition.target and transition_in.is_fallthrough == transition.is_fallthrough:
                 if DFTransition.Else in transition_in.on_values or DFTransition.Else in transition.on_values:
                     transition_in.on_values = [DFTransition.Else]
                 else:
@@ -400,7 +406,11 @@ class DFA:
         for action, _ in zip(actions, condition_states):
             # TODO: conditions
             try:
-                position = position[action].target
+                while True:
+                    transition = position[action]
+                    position = transition.target
+                    if not transition.is_fallthrough:
+                        break
             except AttributeError:
                 return None
             else:
@@ -1288,7 +1298,7 @@ class DirectMatch(Match, HasDefaultDebugInfo):
             next_state = DFState()
             start_action_holder = (self.start_actions if j == 0 else [])
             t = DFTransition([character]).attach(*start_action_holder, *self.char_actions).to(next_state)
-            state[DFTransition.Else] = DFTransition().to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*start_action_holder)
+            state[DFTransition.Else] = DFTransition().to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*start_action_holder).fallthrough()
             if j == len(self.match_contents) - 1:
                 t.attach(*self.finish_actions)
                 sm.mark_accepting(next_state)
@@ -1332,7 +1342,7 @@ class CaseDirectMatch(Match, HasDefaultDebugInfo):
             next_state = DFState()
             start_action_holder = (self.start_actions if j == 0 else [])
             t = DFTransition(self._create_casei_from(character)).attach(*start_action_holder, *self.char_actions).to(next_state)
-            state[DFTransition.Else] = DFTransition().to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*start_action_holder)
+            state[DFTransition.Else] = DFTransition().to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*start_action_holder).fallthrough()
             if j == len(self.match_contents) - 1:
                 t.attach(*self.finish_actions)
                 sm.mark_accepting(next_state)
@@ -2084,7 +2094,7 @@ class RegexMatch(Match):
                         if x in conflict.on_values:
                             conflict.on_values.remove(x)
 
-            new_state.transition(DFTransition(list(source)).to(target).attach(*actions))
+            new_state.transition(DFTransition(list(source)).to(target).attach(*actions).fallthrough(target == else_path))
 
         return new_state
 
@@ -2148,7 +2158,7 @@ class EndMatch(Match):
         sm.add(ok_state)
         sm.mark_accepting(ok_state)
         start_state.transition(DFTransition([DFTransition.End]).attach(*self.start_actions, *self.char_actions, *self.finish_actions).to(ok_state))
-        start_state.transition(DFTransition([DFTransition.Else]).to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*self.start_actions))
+        start_state.transition(DFTransition([DFTransition.Else]).to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*self.start_actions)).fallthrough()
         return sm
 
 class ConcatMatch(Match):
@@ -2377,7 +2387,7 @@ class CaseNode(Node):
                 continue # Ignore it because else will
             
             if actual_else: # sometimes you actually don't need one
-                converted_states[processing].transition(DFTransition(list(actual_else)).to(treat_as_else), allow_replace=True)
+                converted_states[processing].transition(DFTransition(list(actual_else)).to(treat_as_else).fallthrough(), allow_replace=True)
 
         return new_dfa, corresponding_finish_states
 
@@ -2402,14 +2412,16 @@ class CaseNode(Node):
             self.next = next_node
 
     def convert(self, current_error_handlers):
-        # IN NEED OF REFACTORING (slightly unclear how it does it's fairly simple job)
         has_else = any(None in x for x in itertools.chain(self.sub_matches.keys(), self.empty_matches))
 
         # First, render out all of the sub_dfas
         sub_dfas = {x: y.convert(current_error_handlers) for x, y in self.sub_matches.items()}
 
+        # Map of (DFA) -> (set of Matches)
         original_backreference = {}
+        # Map of (DFA) -> (set of Empty Matches) aka matches that have nothing but actions
         empty_backreference = {}
+        # All dfas that need to be merged
         mergeable_ds = set() 
         # Flatten the sub_matches
         for sub_matches in self.sub_matches:
@@ -2443,7 +2455,9 @@ class CaseNode(Node):
 
             # Is there a sub-DFA (actual clause to execute) for the else transition?
             if original_backreference[None] is not None:
+                # Find all transitions that would be pointing to a nomatch...
                 for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
+                    # ... and reattach them to the new else state machine
                     trans.to(sub_dfas[original_backreference[None]].starting_state).attach(*else_actions)
                 # We have to add that DFA's state to the overall dfa's states array, since it won't get picked up by mergable_ds _UNLESS_ original_backreference contains more than frozenset({None})
                 if len(original_backreference[None]) == 1:
@@ -2457,12 +2471,15 @@ class CaseNode(Node):
                 decider_dfa.mark_accepting(new_state)
                 decider_dfa.add(new_state)
                 for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
-                    trans.to(new_state).attach(*else_actions, prepend=True)
+                    trans.to(new_state).attach(*else_actions, prepend=True).fallthrough()  # this is an error handler, make sure it's a fallthrough
 
         # Go through and link up all the states
         for i in mergeable_ds:
+            # If there was no state machine associated with the DFA
             if original_backreference[i] is None:
+                # Find the actual backref
                 true_backref = empty_backreference[i]
+                # If this was _not_ the else
                 if true_backref is not None:
                     # Handle empty matches
                     all_transitions_empty = set().union(*(decider_dfa.transitions_pointing_to(x) for x in corresponding_finish_states[i]))
@@ -3568,6 +3585,10 @@ class CodegenCtx:
             transition_body.add()
             transition_body.add(f"// action {action!r} ")
             transition_body += self._generate_action_implementation(action)
+        # Check if we should fallthrough and generate a goto
+        if transition.is_fallthrough:
+            transition_body.add(f"// fallthrough")
+            transition_body.add(f"goto fall_{self.dfa.states.index(transition.target)};")
         return transition_body.value()
 
     def _generate_switch_body(self, state: DFState):
@@ -3625,6 +3646,8 @@ class CodegenCtx:
             for idx, state in enumerate(self.dfa.states):
                 # Emit the case label
                 contents.add(f"case {idx}:")
+                # Emit goto target for fallthroughs
+                contents.add(f"fall_{idx}:")
                 with contents as state_body:
                     # Is this a normal state
                     if state is not self.generic_fail_state:
@@ -3692,7 +3715,7 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None):
                 if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER]:
                     is_real = False
             if is_real:
-                g.edge(str(id(state)), str(id(transition.target)), label=label)
+                g.edge(str(id(state)), str(id(transition.target)), label=label, style="dashed" if transition.is_fallthrough else "solid")
 
     g.render(out_name, format="pdf", cleanup=True)
 
