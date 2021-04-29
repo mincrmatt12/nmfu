@@ -269,6 +269,9 @@ class DFState:
         DFState.all_states[id(self)] = self
 
     def transition(self, transition, allow_replace=False, allow_replace_if=None):
+        # Add parent relationship if this is a new transition
+        if ProgramData.lookup(transition, DebugTag.PARENT) is None:
+            ProgramData.imbue(transition, DebugTag.PARENT, self)
         if allow_replace_if is None:
             allow_replace = lambda x: allow_replace
         else:
@@ -577,6 +580,7 @@ class ProgramFlag(int, enum.Enum):
     # - Structure options
     DYNAMIC_MEMORY = 7  # Allow use of dynamic memory
     INCLUDE_USER_PTR = (11, "Add a void* to the state structure, useful with hooks")
+    STRICT_DONE_TOKEN_GENERATION = (15, "Only return DONE from _feed at accept states, not from transitions to accept states")
     # |
     # - String storage options
     ALLOCATE_STR_SPACE_IN_STRUCT = (5, "Allocate string space in struct", True, (), (6,))  # allocate the string space in the struct as an array, default
@@ -2459,6 +2463,7 @@ class CaseNode(Node):
                 for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
                     # ... and reattach them to the new else state machine
                     trans.to(sub_dfas[original_backreference[None]].starting_state).attach(*else_actions)
+                    ProgramData.imbue(trans, DebugTag.NAME, "else action on case node")
                 # We have to add that DFA's state to the overall dfa's states array, since it won't get picked up by mergable_ds _UNLESS_ original_backreference contains more than frozenset({None})
                 if len(original_backreference[None]) == 1:
                     for state in sub_dfas[original_backreference[None]].states:
@@ -2472,6 +2477,8 @@ class CaseNode(Node):
                 decider_dfa.add(new_state)
                 for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
                     trans.to(new_state).attach(*else_actions, prepend=True).fallthrough()  # this is an error handler, make sure it's a fallthrough
+                    # give the transition better debug info
+                    ProgramData.imbue(trans, DebugTag.NAME, "else action on case node")
 
         # Go through and link up all the states
         for i in mergeable_ds:
@@ -3113,6 +3120,18 @@ class DfaCompileCtx:
         dprint[ProgramFlag.VERBOSE_OPTIMIZE_RESULTS]("simplified {} transitions".format(mod))
         return mod
 
+    def _verify_fallthrough_loop(self):
+        """
+        Check if any transitions pointing to their own state are fallthrough, which is invalid
+        since it would cause an infinite loop
+        """
+
+        for state in self.dfa.states:
+            for transition in state.transitions:
+                if transition.target == state and transition.is_fallthrough:
+                    raise IllegalDFAStateError("Inifinite loop due to self-referential fallthrough", transition)
+        
+
     def compile(self):
         """
         Convert the AST into a (potentially optimized) DFA.
@@ -3123,6 +3142,9 @@ class DfaCompileCtx:
 
         while self._optimize_remove_inaccessible() + self._optimize_simplify_transition_matches():
             pass
+
+        # verify correctness of DFA
+        self._verify_fallthrough_loop()
 
 class Outputter:
     SHIFT_WIDTH = 4
@@ -3589,6 +3611,10 @@ class CodegenCtx:
         if transition.is_fallthrough:
             transition_body.add(f"// fallthrough")
             transition_body.add(f"goto fall_{self.dfa.states.index(transition.target)};")
+        # Otherwise, if this state is targeting an accept state, return DONE instead of OK
+        elif transition.target in self.dfa.accepting_states and not ProgramData.do(ProgramFlag.STRICT_DONE_TOKEN_GENERATION):
+            transition_body.add("// immediately return DONE")
+            transition_body.add(f"return {self.program_name.upper()}_DONE;")
         return transition_body.value()
 
     def _generate_switch_body(self, state: DFState):
@@ -3646,8 +3672,9 @@ class CodegenCtx:
             for idx, state in enumerate(self.dfa.states):
                 # Emit the case label
                 contents.add(f"case {idx}:")
-                # Emit goto target for fallthroughs
-                contents.add(f"fall_{idx}:")
+                # Emit goto target for fallthroughs if anything falls here
+                if any(x.is_fallthrough for x in self.dfa.transitions_pointing_to(state)):
+                    contents.add(f"fall_{idx}:")
                 with contents as state_body:
                     # Is this a normal state
                     if state is not self.generic_fail_state:
