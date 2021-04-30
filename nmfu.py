@@ -2286,17 +2286,12 @@ class CaseNode(Node):
         """
 
         new_dfa = DFA()
-        alphabet = set()
 
         for dfa in ds:
             for state in dfa.states:
                 for trans in state.transitions:
                     if trans.conditions:
                         raise IllegalDFAStateError("Conditions are not allowed in case matches", state)
-                    for v in trans.on_values:
-                        alphabet.add(v)
-
-        alphabet.add(DFTransition.Else) 
 
         converted_states = {}
         corresponding_finish_states = {dfa: [] for dfa in ds}
@@ -2334,13 +2329,14 @@ class CaseNode(Node):
             processing = to_process.get()
 
             local_alphabet = set()
+            entire_local_alphabet = set()
 
             # grab the local alphabet as a set of sets (on_values) IGNORING things that go to else_path
             for _, sub_state in processing:
                 for trans in sub_state.transitions:
-                    if trans.target == treat_as_else:
-                        continue
-                    local_alphabet.add(frozenset(trans.on_values))
+                    entire_local_alphabet |= set(trans.on_values)
+                    if trans.target != treat_as_else:
+                        local_alphabet.add(frozenset(trans.on_values))
 
             # simplify such that each element in local_alphabet is both disjoint and are all subsets of
             # at least one entry in the original local_alphabet (i.e. such that any original element can
@@ -2391,16 +2387,14 @@ class CaseNode(Node):
             if converted_states[processing] in new_dfa.accepting_states:
                 continue
 
-
             # construct the actual else transition based on the inverse of alphabet
             flat_local_alphabet = set(itertools.chain(*local_alphabet))
 
-            actual_else = alphabet - flat_local_alphabet
+            actual_else = entire_local_alphabet - flat_local_alphabet
+            print(processing, local_alphabet, entire_local_alphabet, flat_local_alphabet, actual_else)
             if DFTransition.Else in actual_else:
                 # just use it
                 actual_else = set((DFTransition.Else,))
-            elif DFTransition.Else in flat_local_alphabet:
-                continue # Ignore it because else will
             
             if actual_else: # sometimes you actually don't need one
                 converted_states[processing].transition(DFTransition(list(actual_else)).to(treat_as_else).fallthrough(), allow_replace=True)
