@@ -1,0 +1,3 @@
+FROM appimagecrafters/appimage-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends adwaita-icon-theme && rm -rf /var/lib/apt/lists/* 

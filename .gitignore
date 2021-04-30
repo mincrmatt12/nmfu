@@ -10,3 +10,10 @@ dist/*
 .hypothesis/*
 
 junit*.xml
+
+AppDir/
+*.AppImage
+*.snap
+
+appimage-builder-cache/
+.pytest_cache/

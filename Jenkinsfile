@@ -35,25 +35,19 @@ pipeline {
 				junit 'junit.xml'
 			}
 		}
-		stage('Package snap test') {
+		stage('Test package appimage') {
 			agent {
-				docker {
+				dockerfile {
 					label "docker && linux"
-					image 'cibuilds/snapcraft:core18'
-					args "-u 0:0"
+					filename 'Dockerfile.appimage'
 				}
 			}
 			steps {
-				sh "apt-get update && snapcraft"
-				archiveArtifacts artifacts: '*.snap'
-			}
-			post {
-				always {
-					sh "chmod -R a+rw \$PWD/"
-				}
+				sh "appimage-builder"
+				archiveArtifacts "*.AppImage"
 			}
 		}
-		stage('Deploy') {
+		stage('Deploy/Package') {
 			when {
 				beforeInput true
 				buildingTag()
@@ -86,21 +80,29 @@ pipeline {
 				}
 				stage ('Upload Snap') {
 					agent {
-						label "scala"
+						docker {
+							label "docker && linux"
+							image 'cibuilds/snapcraft:core18'
+							args "-u 0:0"
+						}
 					}
 					environment {
 						SNAP_LOGIN_FILE = credentials('snapcraft-login')
 					}
 					steps {
-						// clean out previously built snaps
-						lock('snapcraft-scala-nmfu') {
+						dir("snapbuild") {
 							sh "rm *.snap || true"
-							sh "snapcraft clean --use-lxd"
-							sh "snapcraft snap --use-lxd"
+							sh "cp ../README.md ../nmfu.py ../setup.py ../snapcraft.yaml ."
+							sh "apt-get update && snapcraft"
 							archiveArtifacts artifacts: '*.snap'
+							sh "snapcraft login --with $SNAP_LOGIN_FILE"
+							sh "snapcraft upload --release $SNAPCRAFT_RELEASE_CHANNEL *.snap"
 						}
-						sh "snapcraft login --with $SNAP_LOGIN_FILE"
-						sh "snapcraft upload --release $SNAPCRAFT_RELEASE_CHANNEL *.snap"
+					}
+					post {
+						always {
+							sh "chmod -R a+rw \$PWD/"
+						}
 					}
 				}
 			}
