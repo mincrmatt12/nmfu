@@ -1,5 +1,5 @@
 name: nmfu
-version: git
+version: 0.2.1
 summary: A parser generator
 description: A parser generator
 grade: stable

@@ -35,18 +35,6 @@ pipeline {
 				junit 'junit.xml'
 			}
 		}
-		stage('Test package appimage') {
-			agent {
-				dockerfile {
-					label "docker && linux"
-					filename 'Dockerfile.appimage'
-				}
-			}
-			steps {
-				sh "appimage-builder"
-				archiveArtifacts "*.AppImage"
-			}
-		}
 		stage('Deploy/Package') {
 			when {
 				beforeInput true
@@ -76,6 +64,18 @@ pipeline {
 					steps {
 						unstash name: 'built'
 						sh "twine upload -u $DPYPI_INFO_USR -p $DPYPI_INFO_PSW -r $PYPI_REPOSITORY_NAME --non-interactive dist/*"
+					}
+				}
+				stage('Generate AppImage') {
+					agent {
+						dockerfile {
+							label "docker && linux"
+							filename 'Dockerfile.appimage'
+						}
+					}
+					steps {
+						sh "appimage-builder"
+						archiveArtifacts "*.AppImage"
 					}
 				}
 				stage ('Upload Snap') {
