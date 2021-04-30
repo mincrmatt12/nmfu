@@ -35,6 +35,24 @@ pipeline {
 				junit 'junit.xml'
 			}
 		}
+		stage('Package snap test') {
+			agent {
+				docker {
+					label "docker && linux"
+					image 'cibuilds/snapcraft:core18'
+					args "-u 0:0"
+				}
+			}
+			steps {
+				sh "apt-get update && snapcraft"
+				archiveArtifacts artifacts: '*.snap'
+			}
+			post {
+				always {
+					sh "chmod -R a+rw \$PWD/"
+				}
+			}
+		}
 		stage('Deploy') {
 			when {
 				beforeInput true
