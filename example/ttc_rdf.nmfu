@@ -71,12 +71,9 @@ parser {
                                 catch (outofspace) {
                                     date = "";
                                 }
-
-                                wait "</dc:date>";
                             }
-                            catch (nomatch) {
-                                wait "</dc:date>";
-                            }
+                            catch (nomatch) {}
+                            wait "</dc:date>";
                         }
                     }
                 }

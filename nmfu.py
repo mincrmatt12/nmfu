@@ -502,7 +502,7 @@ class DFA:
 
         return False
 
-    def append_after(self, chained_dfa: "DFA", treat_as_else: DFState, sub_states=None, mark_accept=True, chain_actions=None):
+    def append_after(self, chained_dfa: "DFA", treat_as_else: Union[DFState, List[DFState]], sub_states=None, mark_accept=True, chain_actions=None):
         """
         Add the chained_dfa in such a way that its start state "becomes" all of the `sub_states` (or if unspecified, the accept states of _this_ dfa)
         """
@@ -510,19 +510,22 @@ class DFA:
         if sub_states is None:
             sub_states = self.accepting_states
 
+        if type(treat_as_else) is DFState:
+            treat_as_else = (treat_as_else,)
+
         # First, add transitions between each of the sub_states corresponding to the transitions of the original starting node
         for sub_state in sub_states:
             for transition in chained_dfa.starting_state.transitions: # specifically exclude the else transition
                 try:
                     if not chain_actions:
-                        sub_state.transition(transition.copy(), allow_replace_if=lambda x: x.target == treat_as_else)
+                        sub_state.transition(transition.copy(), allow_replace_if=lambda x: x.target in treat_as_else)
                     else:
-                        sub_state.transition(transition.copy().attach(*chain_actions, prepend=True), allow_replace_if=lambda x: x.target == treat_as_else)
+                        sub_state.transition(transition.copy().attach(*chain_actions, prepend=True), allow_replace_if=lambda x: x.target in treat_as_else)
                 except IllegalDFAStateError as e:
                     # Check if this is a transition to an else case
-                    if transition.target == treat_as_else:
+                    if transition.target in treat_as_else:
                         # If the sub_state already has something pointing there, it probably deals with properly
-                        if any(x.target == treat_as_else for x in sub_state.transitions):
+                        if any(x.target in treat_as_else for x in sub_state.transitions):
                             # ignore the error
                             continue
                     # Rewrite the error as something more useful
@@ -2715,7 +2718,7 @@ class TryExceptNode(ActionSinkNode):
 
         # If there is a next node, append it
         if self.next is not None:
-            sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH])
+            sub_dfa.append_after(self.next.convert(current_error_handlers), [current_error_handlers[ErrorReasons.NO_MATCH], self.handler_node])
 
         return sub_dfa
 
