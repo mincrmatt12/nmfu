@@ -273,7 +273,8 @@ class DFState:
         if ProgramData.lookup(transition, DebugTag.PARENT) is None:
             ProgramData.imbue(transition, DebugTag.PARENT, self)
         if allow_replace_if is None:
-            allow_replace = lambda x: allow_replace
+            allow_replace_constant = True if allow_replace else False  # don't allow reference binding
+            allow_replace = lambda x: allow_replace_constant
         else:
             allow_replace = allow_replace_if
 
@@ -282,7 +283,7 @@ class DFState:
             if i.conditions == transition.conditions and (set(i.on_values) & set(transition.on_values)):
                 contained = i
                 break
-        if contained is not None and contained.target != transition.target:
+        if contained is not None and (contained.target != transition.target or contained.is_fallthrough != transition.is_fallthrough):
             if allow_replace(contained):
                 for x in transition.on_values:
                     try:
