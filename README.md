@@ -323,10 +323,11 @@ to NMFU.
 The generated API contains two or three functions, depending on whether or not dynamic memory was used in the parser. These are:
 
 - `{parser_name}_result_t {parser_name}_start({parser_name}_state_t * state);`
-- `{parser_name}_result_t {parser_name}_feed (uint8_t inval, bool is_end, {parser_name}_state_t * state);`
+- `{parser_name}_result_t {parser_name}_feed (const uint8_t *start, const uint8_t *end, {parser_name}_state_t * state);`
+- `{parser_name}_result_t {parser_name}_end  ({parser_name}_state_t * state);` (only generated if EOF support is on)
 - `void                   {parser_name}_free ({parser_name}_state_t * state);` (only generated if dynamic memory is used)
 
-These are used to initialize the parser state, send an input character (or end-of-input condition) to the parser, and free any allocated resources
+These are used to initialize the parser state, send input characters to the parser, send an end condition (if enabled) and free any allocated resources
 for the parser (if present).
 
 The generated `{parser_name}_state_t` struct contains the member `c` within which all of the declared _output-variables_ are accessible. Additionally,
@@ -393,13 +394,12 @@ A basic usage of a generated parser looks something like
 http_state_t state;
 http_start(&state); // could potentially return something other than OK if, for example, if the first statement in the parser was "finish" for some reason.
 
-http_feed('G', false, &state);
-http_feed('E', false, &state);
-http_feed('T', false, &state);
+const uint8_t *in = "GET";
+http_feed(in, in + 3, &state);
 
 // ...
 
-http_result_t code = http_feed(0 /* value unimportant, conventionally zero */, true, &state);
+http_result_t code = http_end(&state);
 
 // ... do something with the code and state ...
 
