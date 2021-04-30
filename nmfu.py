@@ -259,7 +259,7 @@ class DFTransition:
 
     @classmethod
     def from_key(cls, on_values, conditions, inherited):
-        return cls(on_values, conditions).to(inherited.target).attach(*inherited.actions)
+        return cls(on_values, conditions).to(inherited.target).attach(*inherited.actions).fallthrough(inherited.is_fallthrough)
 
 class DFState:
     all_states = {}
@@ -456,7 +456,7 @@ class DFA:
         return visited
 
 
-    def transitions_pointing_to(self, target_state: DFState):
+    def transitions_pointing_to(self, target_state: DFState, include_states=False):
         """
         Return a set of all transitions that point to the target state that are reachable
         from the start state
@@ -467,7 +467,10 @@ class DFA:
         for state in self.dfs():
             for t in state.all_transitions():
                 if t.target == target_state:
-                    result.add(t)
+                    if include_states:
+                        result.add((state, t))
+                    else:
+                        result.add(t)
 
         return result
 
@@ -2144,8 +2147,10 @@ class WaitMatch(Match):
 
     def convert(self, current_error_handlers: dict):
         sm = self.match_contents.convert(current_error_handlers)
-        for trans in sm.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
+        for state, trans in sm.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH], True):
             trans.to(sm.starting_state)
+            if state == sm.starting_state:
+                trans.fallthrough(False)
         return sm
 
 class EndMatch(Match):
