@@ -34,8 +34,6 @@ def test_case_else_fallthrough_generation():
     node = nmfu.CaseNode({frozenset([None]): target_case_match, frozenset([complex_example_a, complex_example_b]): None})
     dfa = node.convert(defaultdict(lambda: errs))
 
-    nmfu.debug_dump_dfa(dfa)
-
     assert dfa.simulate("handle") in dfa.accepting_states
     assert dfa.simulate("trap") in dfa.accepting_states
     assert dfa.simulate("tehandle") in dfa.accepting_states

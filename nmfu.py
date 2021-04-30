@@ -2391,7 +2391,6 @@ class CaseNode(Node):
             flat_local_alphabet = set(itertools.chain(*local_alphabet))
 
             actual_else = entire_local_alphabet - flat_local_alphabet
-            print(processing, local_alphabet, entire_local_alphabet, flat_local_alphabet, actual_else)
             if DFTransition.Else in actual_else:
                 # just use it
                 actual_else = set((DFTransition.Else,))
