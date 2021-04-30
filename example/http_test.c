@@ -1,5 +1,7 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "http.h"
 
 int main(int argc, char ** argv) {
@@ -7,23 +9,38 @@ int main(int argc, char ** argv) {
 	http_start(&state);
 	http_result_t code;
 
+	uint8_t *line = NULL;
+	size_t len = 0;
+	ssize_t nread;
+
 	while (true) {
-		char c = getchar();
-		if (c == '\n') {
-			http_feed('\r', false, &state);
+		if ((nread = getline((char **)&line, &len, stdin)) == -1) {
+			break;
 		}
-		if (c == EOF) break;
-		printf("input %c\n", c);
-		printf("return code %d, ", code = http_feed((uint8_t)c, false, &state));
-		printf("state %d\n", state.state);
-		if (code != HTTP_OK) goto end;
+		printf("input %s", line);
+		if (line[nread-1] == '\n') {
+			nread -= 1;
+			if (nread) {
+				printf("return code %d, ", code = http_feed(line, line + nread, &state));
+				printf("state %d\n", state.state);
+				if (code != HTTP_OK) break;
+			}
+			printf("newline");
+			const uint8_t r[] = {'\r', '\n'};
+			printf("return code %d, ", code = http_feed(r, r + 2, &state));
+			printf("state %d\n", state.state);
+			if (code != HTTP_OK) break;
+		}
+		else {
+			printf("return code %d, ", code = http_feed(line, line + nread, &state));
+			printf("state %d\n", state.state);
+			if (code != HTTP_OK) break;
+		}
 	}
 
+	free(line);
 	puts("final");
-	printf("return code %d, ", http_feed(0, true, &state));
 	printf("state %d\n", state.state);
-
-end:
 	printf("method %d; has_gzip %d; has_etag %d; url %s; etag %s; content_size %d; result %d\n", state.c.method, state.c.accept_gzip, state.c.has_etag, state.c.url, state.c.etag, state.c.content_size, state.c.result);
 
 	printf("and it only uses %lu bytes!\n", sizeof(state));
@@ -68,5 +85,5 @@ end:
 		}
 	}
 
-	http_free(&state);
+	//http_free(&state);
 }

@@ -581,6 +581,7 @@ class ProgramFlag(int, enum.Enum):
     DYNAMIC_MEMORY = 7  # Allow use of dynamic memory
     INCLUDE_USER_PTR = (11, "Add a void* to the state structure, useful with hooks")
     STRICT_DONE_TOKEN_GENERATION = (15, "Only return DONE from _feed at accept states, not from transitions to accept states")
+    EOF_SUPPORT = (16, "Generate a end function and support detecting eofs")
     # |
     # - String storage options
     ALLOCATE_STR_SPACE_IN_STRUCT = (5, "Allocate string space in struct", True, (), (6,))  # allocate the string space in the struct as an array, default
@@ -2909,6 +2910,8 @@ class ParseCtx:
         elif expr.data == "regex":
             return RegexMatch(expr)
         elif expr.data == "end_expr":
+            if not ProgramData.do(ProgramFlag.EOF_SUPPORT):
+                raise IllegalParseTree("end match but EOF support is not enabled", expr)
             match = EndMatch()
             ProgramData.imbue(match, DebugTag.SOURCE_LINE, expr.line)
             ProgramData.imbue(match, DebugTag.SOURCE_COLUMN, expr.column)
@@ -3216,7 +3219,9 @@ class CodegenCtx:
         result.add()
 
         result.add(f"{self.program_name}_result_t {self.program_name}_start({self.program_name}_state_t *state);")
-        result.add(f"{self.program_name}_result_t {self.program_name}_feed(uint8_t inval, bool is_end, {self.program_name}_state_t *state);")
+        result.add(f"{self.program_name}_result_t {self.program_name}_feed(const uint8_t *start, const uint8_t *end, {self.program_name}_state_t *state);")
+        if ProgramData.do(ProgramFlag.EOF_SUPPORT):
+            result.add(f"{self.program_name}_result_t {self.program_name}_end({self.program_name}_state_t *state);")
         if ProgramData.do(ProgramFlag.DYNAMIC_MEMORY):
             result.add(f"void {self.program_name}_free({self.program_name}_state_t *state);")
         
@@ -3246,6 +3251,8 @@ class CodegenCtx:
         result.add()
         result += self._generate_start_implementation()
         result += self._generate_feed_implementation()
+        if ProgramData.do(ProgramFlag.EOF_SUPPORT):
+            result += self._generate_end_implementation()
         if ProgramData.do(ProgramFlag.DYNAMIC_MEMORY):
             result += self._generate_free_implementation()
         return result.value()
@@ -3524,10 +3531,7 @@ class CodegenCtx:
         return result.value()
 
     def _generate_equal_check(self, on_value):
-        if on_value == DFTransition.End:
-            return "is_end"
-        else:
-            return f"inval == {ord(on_value)} /* {on_value!r} */"
+        return f"inval == {ord(on_value)} /* {on_value!r} */"
 
     def _generate_range_check(self, min_cpoint, max_cpoint):
         """
@@ -3581,13 +3585,11 @@ class CodegenCtx:
                 on_values_remaining.remove(x)
 
         # Match the remaining ones with boring equals
-        checks.extend(self._generate_equal_check(x) for x in on_values_remaining)
+        checks.extend(self._generate_equal_check(x) for x in on_values_remaining if x != DFTransition.End)
 
         result = " || ".join(checks)
 
         condition_strs = [self._generate_condition_for_transition_condition(x) for x in transition.conditions]
-        if DFTransition.End not in transition.on_values:
-            condition_strs.append("!is_end")
         if condition_strs:
             result = f"({result}) && {' && '.join(condition_strs)}"
         return result
@@ -3595,7 +3597,7 @@ class CodegenCtx:
     def _generate_condition_for_transition_condition(self, trans_condition):
         return "false"
 
-    def _generate_transition_body(self, transition: DFTransition):
+    def _generate_transition_body(self, transition: DFTransition, from_end=False):
         transition_body = Outputter()
         # Set the next state
         try:
@@ -3615,6 +3617,18 @@ class CodegenCtx:
         elif transition.target in self.dfa.accepting_states and not ProgramData.do(ProgramFlag.STRICT_DONE_TOKEN_GENERATION):
             transition_body.add("// immediately return DONE")
             transition_body.add(f"return {self.program_name.upper()}_DONE;")
+        # Normally, though, just generate a jump to the next jpto
+        elif not from_end:
+            if transition.target in self.dfa.states:
+                transition_body.add(f"if (++start == end) return {self.program_name.upper()}_OK;");
+                transition_body.add("inval = *start;")
+                if all(x.get_target_override_mode() == ActionOverrideMode.NONE for x in transition.actions):
+                    transition_body.add(f"goto jpto_{self.dfa.states.index(transition.target)};");
+                else:
+                    # use the repeatswitch case
+                    transition_body.add(f"goto repeatswitch;");
+            else:
+                pass # terminating state
         return transition_body.value()
 
     def _generate_switch_body(self, state: DFState):
@@ -3633,17 +3647,20 @@ class CodegenCtx:
         # Create all transition if cases
         for j, transition in enumerate((x for x in state.transitions if x not in else_transitions and x != actual_else_transition)):
             cond_name = "else if"
-            if j == 0:
+            conditions = self._generate_condition_for_transition(transition)
+            if not conditions:
+                continue
+            if not generated_if:
                 generated_if = True
                 cond_name = "if"
-            result.add(f"{cond_name} ({self._generate_condition_for_transition(transition)}) {{")
+            result.add(f"{cond_name} ({conditions}) {{")
             with result as transition_body:
                 transition_body += self._generate_transition_body(transition)
             result.add("}")
 
         for j, transition in enumerate(else_transitions):
             cond_name = "else if"
-            if j == 0 and not generated_if:
+            if not generated_if:
                 generated_if = True
                 cond_name = "if"
             # TODO: condition else
@@ -3665,16 +3682,22 @@ class CodegenCtx:
     def _generate_feed_implementation(self):
         result = Outputter()
 
-        result.add(f"{self.program_name}_result_t {self.program_name}_feed(uint8_t inval, bool is_end, {self.program_name}_state_t *state) {{")
+        result.add(f"{self.program_name}_result_t {self.program_name}_feed(const uint8_t *start, const uint8_t *end, {self.program_name}_state_t *state) {{")
         with result as contents:
-            # The body of feed is a massive switch statement
+            # Generate the `inval` variable
+            contents.add("uint8_t inval = *start;");
+            contents.add();
+            # Generate a target for states with actions that modify the state in an unpredictable way
+            contents.add("repeatswitch:");
+            # The body of feed is a massive switch statement that has a bunch of internal gotos
             contents.add("switch (state->state) {")
             for idx, state in enumerate(self.dfa.states):
                 # Emit the case label
                 contents.add(f"case {idx}:")
-                # Emit goto target for fallthroughs if anything falls here
+                # Emit goto target for fallthroughs if anything falls here (these are separate to make it slightly easier to read)
                 if any(x.is_fallthrough for x in self.dfa.transitions_pointing_to(state)):
                     contents.add(f"fall_{idx}:")
+                contents.add(f"jpto_{idx}:")
                 with contents as state_body:
                     # Is this a normal state
                     if state is not self.generic_fail_state:
@@ -3685,6 +3708,72 @@ class CodegenCtx:
             contents.add(f"default: return {self.program_name.upper()}_FAIL;")
             contents.add("}")
 
+        result.add("}")
+        return result.value()
+
+    def _generate_end_switch_body(self, state: DFState):
+        result = Outputter()
+
+        # Find all transitions that operate on End
+        end_transitions = list(x for x in state.transitions if DFTransition.End in x.on_values and x.conditions)
+        try:
+            unconditional_end_transition = next(state.all_transitions_for((DFTransition.End,)))
+        except StopIteration:
+            unconditional_end_transition = None
+
+        result.add("// possible end transitions")
+        generated_if = False
+        
+        # Create all transitions for possible conditions
+        for j, transition in enumerate(end_transitions):
+            cond_name = "else if"
+            if j == 0 and not generated_if:
+                generated_if = True
+                cond_name = "if"
+            # TODO: condition else
+            result.add(f"{cond_name} (/* todo conditions */ false) {{}}")
+
+        if unconditional_end_transition:
+            if generated_if:
+                result.add("else {")
+            with result as transition_body:
+                transition_body += self._generate_transition_body(unconditional_end_transition, True)
+            if generated_if:
+                result.add("}")
+        else:
+            if generated_if:
+                result.add("else")
+        if state in self.dfa.accepting_states:
+            result.add(f"return {self.program_name.upper()}_DONE;")
+        else:
+            result.add(f"return {self.program_name.upper()}_FAIL;")
+        return result.value()
+    
+    def _generate_end_implementation(self):
+        result = Outputter()
+
+        result.add(f"{self.program_name}_result_t {self.program_name}_end({self.program_name}_state_t *state) {{")
+        result.add(f"#define inval 255") # generate a define for this so that hooks still work
+        with result as contents:
+            # Generate a big switch statement for all states
+            contents.add("switch (state->state) {")
+            for idx, state in enumerate(self.dfa.states):
+                # Emit the case label
+                contents.add(f"case {idx}:")
+                # Emit goto target for fallthroughs if anything falls here (these are separate to make it slightly easier to read)
+                if any(x.is_fallthrough for x in self.dfa.transitions_pointing_to(state)):
+                    contents.add(f"fall_{idx}:")
+                with contents as state_body:
+                    # Is this a normal state
+                    if state is not self.generic_fail_state:
+                        state_body += self._generate_end_switch_body(state)
+                    else:
+                        state_body.add(f"return {self.program_name.upper()}_FAIL;")
+
+            contents.add(f"default: return {self.program_name.upper()}_FAIL;")
+            contents.add("}")
+
+        result.add(f"#undef inval")
         result.add("}")
         return result.value()
 
