@@ -410,6 +410,8 @@ class DFA:
             # TODO: conditions
             try:
                 while True:
+                    if position is None:
+                        return None
                     transition = position[action]
                     position = transition.target
                     if not transition.is_fallthrough:
