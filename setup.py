@@ -18,7 +18,7 @@ setup(
         entry_points={
             "console_scripts": ["nmfu=nmfu:main"]
         },
-        install_requires=["lark-parser==0.8.*"],
+        install_requires=["lark-parser==0.11.*"],
         author="Matthew Mirvish",
         author_email="matthew@mm12.xyz",
 
