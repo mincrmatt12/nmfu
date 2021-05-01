@@ -1,0 +1,8 @@
+parser {
+    loop {
+        case {
+            else, "," -> {}
+            "end" -> {break;}
+        }
+    }
+}

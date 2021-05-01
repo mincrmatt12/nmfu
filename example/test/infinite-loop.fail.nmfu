@@ -1,0 +1,6 @@
+parser {
+    loop {
+        "asdf";
+    }
+    "unreachable";
+}

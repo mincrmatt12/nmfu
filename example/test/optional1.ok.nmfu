@@ -1,0 +1,7 @@
+parser {
+    optional {
+        "--";
+        finish;
+    }
+    "text";
+}

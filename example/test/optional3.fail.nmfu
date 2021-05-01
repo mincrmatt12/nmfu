@@ -1,0 +1,7 @@
+parser {
+    optional {
+        /[te]est/; // ambiguous on first letter (in t case)
+        finish;
+    }
+    "text";
+}

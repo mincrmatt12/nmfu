@@ -1,0 +1,7 @@
+parser {
+    try {
+        /\d\d\d\d-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+[\-+]\d\d:\d\d/;
+    }
+    catch (nomatch) {}
+    wait "</dc:date>";
+}

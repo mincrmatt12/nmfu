@@ -1,0 +1,10 @@
+parser {
+    case {
+        "help", /hr+.lp/ -> {
+            " you";
+        }
+        else -> {
+            wait "\r\n";
+        }
+    }
+}
