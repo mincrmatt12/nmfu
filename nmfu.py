@@ -591,6 +591,7 @@ class ProgramFlag(int, enum.Enum):
     INCLUDE_USER_PTR = (11, "Add a void* to the state structure, useful with hooks")
     STRICT_DONE_TOKEN_GENERATION = (15, "Only return DONE from _feed at accept states, not from transitions to accept states")
     EOF_SUPPORT = (16, "Generate a end function and support detecting eofs")
+    INDIRECT_START_PTR = (17, "Use an indirect pointer for start to report where the input ends precisely")
     # |
     # - String storage options
     ALLOCATE_STR_SPACE_IN_STRUCT = (5, "Allocate string space in struct", True, (), (6,))  # allocate the string space in the struct as an array, default
@@ -3230,7 +3231,8 @@ class CodegenCtx:
         result.add()
 
         result.add(f"{self.program_name}_result_t {self.program_name}_start({self.program_name}_state_t *state);")
-        result.add(f"{self.program_name}_result_t {self.program_name}_feed(const uint8_t *start, const uint8_t *end, {self.program_name}_state_t *state);")
+        start_typename = "const uint8_t *" if not ProgramData.do(ProgramFlag.INDIRECT_START_PTR) else "const uint8_t **";
+        result.add(f"{self.program_name}_result_t {self.program_name}_feed({start_typename}start, const uint8_t *end, {self.program_name}_state_t *state);")
         if ProgramData.do(ProgramFlag.EOF_SUPPORT):
             result.add(f"{self.program_name}_result_t {self.program_name}_end({self.program_name}_state_t *state);")
         if ProgramData.do(ProgramFlag.DYNAMIC_MEMORY):
@@ -3631,8 +3633,12 @@ class CodegenCtx:
         # Normally, though, just generate a jump to the next jpto
         elif not from_end:
             if transition.target in self.dfa.states:
-                transition_body.add(f"if (++start == end) return {self.program_name.upper()}_OK;");
-                transition_body.add("inval = *start;")
+                if ProgramData.do(ProgramFlag.INDIRECT_START_PTR):
+                    transition_body.add(f"if (++(*start) == end) return {self.program_name.upper()}_OK;");
+                    transition_body.add("inval = **start;")
+                else:
+                    transition_body.add(f"if (++start == end) return {self.program_name.upper()}_OK;");
+                    transition_body.add("inval = *start;")
                 if all(x.get_target_override_mode() == ActionOverrideMode.NONE for x in transition.actions):
                     transition_body.add(f"goto jpto_{self.dfa.states.index(transition.target)};");
                 else:
@@ -3693,10 +3699,11 @@ class CodegenCtx:
     def _generate_feed_implementation(self):
         result = Outputter()
 
-        result.add(f"{self.program_name}_result_t {self.program_name}_feed(const uint8_t *start, const uint8_t *end, {self.program_name}_state_t *state) {{")
+        start_typename = "const uint8_t *" if not ProgramData.do(ProgramFlag.INDIRECT_START_PTR) else "const uint8_t **";
+        result.add(f"{self.program_name}_result_t {self.program_name}_feed({start_typename}start, const uint8_t *end, {self.program_name}_state_t *state) {{")
         with result as contents:
             # Generate the `inval` variable
-            contents.add("uint8_t inval = *start;");
+            contents.add("uint8_t inval = " + ("**start" if ProgramData.do(ProgramFlag.INDIRECT_START_PTR) else "*start") + ";");
             contents.add();
             # Generate a target for states with actions that modify the state in an unpredictable way
             contents.add("repeatswitch:");

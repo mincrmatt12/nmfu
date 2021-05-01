@@ -330,6 +330,13 @@ The generated API contains two or three functions, depending on whether or not d
 These are used to initialize the parser state, send input characters to the parser, send an end condition (if enabled) and free any allocated resources
 for the parser (if present).
 
+The `_feed` function can be optionally configured to instead take a `const uint8_t **` (an "indirect" start pointer), in which case the pointed-to pointer
+will be incremented as characters are read. The final value depends on the return value:
+
+- `_DONE`: the `start` pointer now points to the last character that was read (_not_ like how end points to one past the last character)
+- `_FAIL`: the `start` pointer now points to the first invalid character
+- `_OK`:   the `start` pointer is now at `end` (the buffer was exhausted before either `_DONE` or `_FAIL`)
+
 The generated `{parser_name}_state_t` struct contains the member `c` within which all of the declared _output-variables_ are accessible. Additionally,
 the length of all string variables can be found under members with the name `{out_var_name}_counter`.
 
@@ -396,6 +403,10 @@ http_start(&state); // could potentially return something other than OK if, for 
 
 const uint8_t *in = "GET";
 http_feed(in, in + 3, &state);
+
+// or, in indirect mode:
+uint8_t *place = in;
+http_feed(&place, in + 3, &state);
 
 // ...
 
