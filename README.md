@@ -295,23 +295,12 @@ NMFU regexes support the following common features:
 - the plus, star and question operators
 - the wildcard dot
 - groups
-- alternation (also called OR) (`(abc)|(def)`)
+- alternation (also called OR) (`abc|def`)
 
 There are some key differences though:
 
 - There is no direct way to match the end of input, even with the normal regex syntax `$` (it just matches the literal `$`)
 - The wildcard dot matches _every single input except end_
-- Alternation operates on single characters or groups. This can cause incompatibilities, for example:
-
-     ```
-     /abc|def/; // matches ab, c or d, then ef, not abc or def.
-     ```
-
-     which must instead be written as 
-
-     ```
-     /(abc)|(def)/;
-     ```
 - Groups are non-capturing, in the sense that they serve no function other than to logically group components together
 - The space character must be escaped, due to limitations in the lexer.
 
