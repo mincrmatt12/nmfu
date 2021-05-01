@@ -13,7 +13,7 @@ EXAMPLE_REGEXES = [
     br't"[^"]+"',
     br'"[^"]+"end?',
     br"yar.le",
-    br"[abc][^def][^ghi][\w]",
+    br"[abci-p][^def][^ghi][\w]\s",
     br"(te|r)y",
     br"asdf|test+(ab)*"
 ]
