@@ -40,3 +40,23 @@ def test_case_else_fallthrough_generation():
     assert dfa.simulate("tegadle") in dfa.accepting_states
     assert dfa.simulate("hand") not in dfa.accepting_states
     assert dfa.simulate("tehadle") not in dfa.accepting_states
+
+def test_try_nomatch_fallthrough_generation():
+    errs1 = nmfu.DFState()
+
+    target_case_match = nmfu.DirectMatch("handle")
+
+    complex_example_a = nmfu.RegexMatch(nmfu.parser.parse(r'/te[^h]adle+/', start="regex"))
+
+    node = nmfu.TryExceptNode([nmfu.ErrorReasons.NO_MATCH])
+    node.set_body(complex_example_a)
+    node.set_handler(target_case_match)
+
+    dfa = node.convert(defaultdict(lambda: errs1))
+    for i in dfa.transitions_pointing_to(node.handler_node):
+        assert i.is_fallthrough
+
+    assert dfa.simulate("tehandle") in dfa.accepting_states
+    assert dfa.simulate("tehandre") not in dfa.accepting_states
+    assert dfa.simulate("tegadlee") in dfa.accepting_states
+

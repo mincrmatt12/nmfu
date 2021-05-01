@@ -36,7 +36,7 @@ DISJOINT_EXAMPLES = {
         b"test": create_regex_match(r"/test/"),
         b"ter+t": create_regex_match(r"/ter+t/"),
         br't[^ter"]*a': create_regex_match(r'/t[^ter"]*a/'),
-        br't"[^"]+"': create_regex_match(r'/t"[^"]+"/'),
+        br't[^tea]r[^ter"]+"': create_regex_match(r'/t[^tea]r[^ter"]+"/'),
         br"oof": create_regex_match(r"/oof/"),
         br"yargle": create_regex_match(r"/yargle/"),
         br"oor+t": create_regex_match(r"/oor+t/"),
