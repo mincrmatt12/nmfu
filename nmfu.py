@@ -2273,14 +2273,12 @@ class CaseNode(Node):
 
         The technique is similar, keeping track of new states as sets of sub-states. Instead of directly using indices to name states, we use tuples of DFA-index and index in that DFA.
 
-        In order to deal with the complexities of the DFA representation in NMFU, we do a simplification pass on the input alphabet. We consider every matched symbol (no conditions allowed) individually to form
-        an alphabet. We then add an additional entry for "true else". An Else transition is therefore equal to "true else" + every symbol not included in the transitions
-        from the given state.
+        In order to deal with the complexities of the DFA representation in NMFU, we do a simplification pass on the input alphabet. For each "superstate" -- that is, an NFA state (set
+        of DFA states), we consider a "local alphabet", which is the set of all sets of symbols matched by all transitions in all substates. We then do a pass on this to convert those
+        sets into disjoint sets, forming the true "local alphabet". We then use these to generate the transitions on the new DFA state, considering elements of the local alphabet
+        which no substates match to form the set of error symbols -- or the "Else" transition, perhaps.
 
         We also ignore all transitions that go to the entry marked as treat_as_else, as we re-create all the else transitions later.
-
-        In order to avoid having to run the DFA minimizer, we utilize a similar approach to the regex class to turn sets of alphabet entries into non-overlapping forms. These are then used as
-        localized alphabet symbols.
 
         We start in state (D1,D1_start),(D2,D2_start),...,(Dn,Dn_start)
         """
@@ -2328,15 +2326,16 @@ class CaseNode(Node):
         while not to_process.empty():
             processing = to_process.get()
 
+            # set of all symbols this dfa state needs to match against. should be disjoint sets
             local_alphabet = set()
-            entire_local_alphabet = set()
+            # set of all symbols which none of the states in this superstate match on (and should therefore
+            # be directed to the else state)
+            actual_else = set()
 
-            # grab the local alphabet as a set of sets (on_values) IGNORING things that go to else_path
+            # find all possible symbols that this superstate needs to check for
             for _, sub_state in processing:
                 for trans in sub_state.transitions:
-                    entire_local_alphabet |= set(trans.on_values)
-                    if trans.target != treat_as_else:
-                        local_alphabet.add(frozenset(trans.on_values))
+                    local_alphabet.add(frozenset(trans.on_values))
 
             # simplify such that each element in local_alphabet is both disjoint and are all subsets of
             # at least one entry in the original local_alphabet (i.e. such that any original element can
@@ -2356,21 +2355,33 @@ class CaseNode(Node):
                 except StopIteration:
                     break
 
-            # process all moves with those sets as alphabets
+            # process all moves with those sets as the alphabet
 
             for symbol in local_alphabet:
                 # construct the set of next states
                 next_state = set()
+                # did we find a transition that marked this symbol as being an error?
+                # since all symbols are now disjoint, two situations occur if this is set:
+                #   a) at least one state correctly matches this symbol, and the others do not
+                #      in this case, we should just discard those other states (since there is no
+                #      reason to "speculatively execute" the error state, obviously)
+                #   b) none of the states correctly match this symbol, in which case it is an overall error.
+                #      in this case, we should add the symbol to the list of symbols that we will assign
+                #      an error transition to
+                found_else_transition = False
                 for (sub_dfa, sub_state) in processing:
                     potential_transition = sub_state[symbol]
                     if potential_transition is None:
                         continue
                     if potential_transition.target == treat_as_else:
+                        found_else_transition = True
                         continue
                     else:
                         next_state.add((sub_dfa, potential_transition.target))
 
+                # if case b) is met 
                 if not next_state:
+                    actual_else |= symbol
                     continue
 
                 next_state = frozenset(next_state)
@@ -2387,10 +2398,6 @@ class CaseNode(Node):
             if converted_states[processing] in new_dfa.accepting_states:
                 continue
 
-            # construct the actual else transition based on the inverse of alphabet
-            flat_local_alphabet = set(itertools.chain(*local_alphabet))
-
-            actual_else = entire_local_alphabet - flat_local_alphabet
             if DFTransition.Else in actual_else:
                 # just use it
                 actual_else = set((DFTransition.Else,))
