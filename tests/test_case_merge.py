@@ -67,3 +67,19 @@ def test_valid_end_states(input_str):
         return
 
     assert sub_dfa.simulate([chr(x) for x in input_str]) in cfs[vals[corresponding]]
+
+def test_else_binding():
+    errs = nmfu.DFState()
+    target_case_match = nmfu.DirectMatch("handle")
+
+    complex_example_a = nmfu.RegexMatch(nmfu.parser.parse(r'/te[^h]adle+/', start="regex"))
+    complex_example_b = nmfu.RegexMatch(nmfu.parser.parse(r'/te[^g]bdle+/', start="regex"))    
+
+    node = nmfu.CaseNode({frozenset([None]): target_case_match, frozenset([complex_example_a, complex_example_b]): None})
+    dfa = node.convert(defaultdict(lambda: errs))
+
+    assert dfa.simulate("handle") in dfa.accepting_states
+    assert dfa.simulate("tehhandle") in dfa.accepting_states
+    assert dfa.simulate("tegadle") in dfa.accepting_states
+    assert dfa.simulate("hand") not in dfa.accepting_states
+    assert dfa.simulate("tehbdleee") in dfa.accepting_states
