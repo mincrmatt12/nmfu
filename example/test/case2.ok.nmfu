@@ -1,0 +1,13 @@
+parser {
+    case {
+        "help", /hr+.lp/ -> {
+            " you";
+        }
+        ("concat " /e+xpr/) -> {
+            " yay";
+        }
+        else -> {
+            wait "\r\n";
+        }
+    }
+}
