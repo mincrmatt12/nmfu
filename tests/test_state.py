@@ -9,7 +9,9 @@ def test_illegal_transitions():
     s1.transition(nmfu.DFTransition(["a"]).to(s2))
     with pytest.raises(nmfu.IllegalDFAStateError):
         s1.transition(nmfu.DFTransition(["a"]).to(s1))
+    with pytest.raises(nmfu.IllegalDFAStateError):
         s1.transition(nmfu.DFTransition(["a", "b"]).to(s1))
+    with pytest.raises(nmfu.IllegalDFAStateError):
         s1.transition(nmfu.DFTransition(["a"]).to(s2).fallthrough())
     s1.transition(nmfu.DFTransition(["b"]).to(s2))
 

@@ -32,41 +32,53 @@ def test_merge_with_dms(dm_prefixes):
 def create_regex_match(x):
     return nmfu.RegexMatch(nmfu.parser.parse(x, start="regex"))
 
-DISJOINT_EXAMPLES = {
-        b"test": create_regex_match(r"/test/"),
-        b"ter+t": create_regex_match(r"/ter+t/"),
-        br't[^ter"]*a': create_regex_match(r'/t[^ter"]*a/'),
-        br't[^tea]r[^ter"]+"': create_regex_match(r'/t[^tea]r[^ter"]+"/'),
-        br"oof": create_regex_match(r"/oof/"),
-        br"yargle": create_regex_match(r"/yargle/"),
-        br"oor+t": create_regex_match(r"/oor+t/"),
-        br"(te|r)y": create_regex_match(r"/(te)|ry/")
-}
+DISJOINT_REGEX_EXAMPLE_KEYS = [
+    b"test",
+    b"ter+t",
+    br't[^ter"]*a',
+    br't[^tea]r[^ter"]+"',
+    br"oof",
+    br"yargle",
+    br"oor+t",
+    br"(te|r)y"
+]
 
-@given(st.sets(st.sampled_from(list(DISJOINT_EXAMPLES.keys())), min_size=1))
-def test_merge_with_regexes(re_matches):
-    obj = nmfu.CaseNode({})
-    obj._merge([DISJOINT_EXAMPLES[x].convert(defaultdict(lambda: None)) for x in re_matches], None)
+@pytest.fixture(scope="module")
+def disjoint_example_map():
+    return {
+        k: create_regex_match("/" + k.decode('ascii') + "/") for k in DISJOINT_REGEX_EXAMPLE_KEYS
+    }
 
-@given(st.one_of(st.from_regex(x, fullmatch=True) for x in DISJOINT_EXAMPLES))
-@settings(max_examples=200, deadline=None)
-@example(b"tfa")  # this caused a bug before version 0.2.0
-def test_valid_end_states(input_str):
+@pytest.fixture(scope="module")
+def disjoint_case_merged(disjoint_example_map):
     obj = nmfu.CaseNode({})
-    vals = {x: x.convert(defaultdict(lambda: None)) for x in DISJOINT_EXAMPLES.values()}
+    vals = {x: x.convert(defaultdict(lambda: None)) for x in disjoint_example_map.values()}
     sub_dfa, cfs = obj._merge(list(vals.values()), None)
+
+    return sub_dfa, cfs, vals
+    
+
+@given(re_matches=st.sets(st.sampled_from(DISJOINT_REGEX_EXAMPLE_KEYS), min_size=1))
+def test_merge_with_regexes(re_matches, disjoint_example_map):
+    obj = nmfu.CaseNode({})
+    obj._merge([disjoint_example_map[x].convert(defaultdict(lambda: None)) for x in re_matches], None)
+
+@example(b"tfa")  # this caused a bug before version 0.2.0
+@given(st.one_of(st.from_regex(x, fullmatch=True) for x in (DISJOINT_REGEX_EXAMPLE_KEYS + [b"..."])))
+def test_valid_end_states(disjoint_case_merged, disjoint_example_map, input_str):
+    sub_dfa, cfs, vals = disjoint_case_merged 
     corresponding = None
 
     # figure out which one it matches
-    for i in DISJOINT_EXAMPLES:
+    for i in DISJOINT_REGEX_EXAMPLE_KEYS:
         if re.fullmatch(i, input_str):
-            corresponding = DISJOINT_EXAMPLES[i]
+            corresponding = disjoint_example_map[i]
             break
 
     if corresponding is None:
-        return
-
-    assert sub_dfa.simulate([chr(x) for x in input_str]) in cfs[vals[corresponding]]
+        assert sub_dfa.simulate([chr(x) for x in input_str]) not in list(cfs.values())
+    else:
+        assert sub_dfa.simulate([chr(x) for x in input_str]) in cfs[vals[corresponding]]
 
 def test_else_binding():
     errs = nmfu.DFState()

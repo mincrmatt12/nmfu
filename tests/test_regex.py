@@ -5,35 +5,34 @@ import hypothesis.strategies as st
 import pytest
 from collections import defaultdict
 
-def create_regex_match(x):
-    return nmfu.RegexMatch(nmfu.parser.parse(x, start="regex"))
+EXAMPLE_REGEXES = [
+    b"test",
+    b"ter+t",
+    b"as?s?df",
+    br't[^ter"]*a',
+    br't"[^"]+"',
+    br'"[^"]+"end?',
+    br"yar.le",
+    br"[abc][^def][^ghi][\w]",
+    br"(te|r)y",
+    br"asdf|test+(ab)*"
+]
 
-DISJOINT_EXAMPLES = {
-        b"test": create_regex_match(r"/test/"),
-        b"ter+t": create_regex_match(r"/ter+t/"),
-        br't[^ter"]*a': create_regex_match(r'/t[^ter"]*a/'),
-        br't"[^"]+"': create_regex_match(r'/t"[^"]+"/'),
-        br"oof": create_regex_match(r"/oof/"),
-        br"yar.le": create_regex_match(r"/yar.le/"),
-        br"oor+t": create_regex_match(r"/oor+t/"),
-        br"(te|r)y": create_regex_match(r"/(te)|ry/")
-}
+@pytest.fixture(scope="module", params=EXAMPLE_REGEXES)
+def match_fixture(request):
+    x = request.param
+    return nmfu.RegexMatch(nmfu.parser.parse('/' + x.decode("ascii") + '/', start="regex")).convert(defaultdict(lambda: None)), re.compile(x), x
 
-@given(st.one_of(st.from_regex(x, fullmatch=True) for x in DISJOINT_EXAMPLES))
-def test_regexes_match(input_str):
-    corresponding = None
+@given(data=st.data())
+def test_regexes_match(data, match_fixture):
+    dfa, pre, pattern = match_fixture
+    input_str = data.draw(st.one_of(st.from_regex(pattern, fullmatch=True), st.binary(min_size=2)))
 
-    # figure out which one it matches
-    for i in DISJOINT_EXAMPLES:
-        if re.fullmatch(i, input_str):
-            corresponding = DISJOINT_EXAMPLES[i]
-            break
-
-    if corresponding is None:
-        return # error in hypothesis
-
-    dfa = corresponding.convert(defaultdict(lambda: None))
-    assert dfa.simulate([chr(x) for x in input_str]) in dfa.accepting_states
+    result = dfa.simulate([chr(x) for x in input_str])
+    if pre.fullmatch(input_str):
+        assert result in dfa.accepting_states
+    else:
+        assert result not in dfa.accepting_states
 
 def test_regex_charclass_splits():
     c1, c2 = nmfu.RegexCharClass(frozenset("abc")), nmfu.RegexCharClass(frozenset("bcd"))
