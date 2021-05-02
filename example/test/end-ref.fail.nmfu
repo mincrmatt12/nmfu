@@ -1,0 +1,14 @@
+// args: -O3 -feof-support
+
+out str[32] test;
+
+parser {
+    loop {
+        case {
+            else -> {/./;}
+            end -> {
+                test += [$last];
+            }
+        }
+    }
+}

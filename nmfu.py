@@ -1407,6 +1407,7 @@ class OutputStorage(HasDefaultDebugInfo):
 class IntegerExprUseContext(enum.Enum):
     ASSIGN_ON_MATCH = 0
     ASSIGN_INITIAL = 1
+    ASSIGN_ON_END = 2
 
 class IntegerExpr(abc.ABC):
     @abc.abstractmethod
@@ -1461,7 +1462,7 @@ class LastCharIntegerExpr(IntegerExpr):
         return OutputStorageType.INT
 
     def get_invalid_contexts(self):
-        return [IntegerExprUseContext.ASSIGN_INITIAL]
+        return [IntegerExprUseContext.ASSIGN_INITIAL, IntegerExprUseContext.ASSIGN_ON_END]
 
 class MathIntegerExpr(IntegerExpr):
     def __init__(self, children: List[IntegerExpr]):
@@ -2201,7 +2202,7 @@ class EndMatch(Match):
         sm.add(ok_state)
         sm.mark_accepting(ok_state)
         start_state.transition(DFTransition([DFTransition.End]).attach(*self.start_actions, *self.char_actions, *self.finish_actions).to(ok_state))
-        start_state.transition(DFTransition([DFTransition.Else]).to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*self.start_actions)).fallthrough()
+        start_state.transition(DFTransition([DFTransition.Else]).to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*self.start_actions).fallthrough())
         return sm
 
 class ConcatMatch(Match):
@@ -3475,13 +3476,18 @@ class CodegenCtx:
 
         return f"strncpy(state->c.{into.name}, \"{self._escape_string(value)}\", {into.str_size});"
 
-    def _generate_action_implementation(self, action: Action, is_start: bool = False):
+    def _generate_action_implementation(self, action: Action, is_start: bool = False, is_end: bool = False):
         result = Outputter()
+        ctx = IntegerExprUseContext.ASSIGN_ON_MATCH
+        if is_start:
+            ctx = IntegerExprUseContext.ASSIGN_INITIAL
+        elif is_end:
+            ctx = IntegerExprUseContext.ASSIGN_ON_END
         if isinstance(action, FinishAction):
             result.add(f"return {self.program_name.upper()}_DONE;")
         elif isinstance(action, SetTo):
             target = action.into_storage
-            value = self._generate_code_for_int_expr(action.value_expr, IntegerExprUseContext.ASSIGN_INITIAL if is_start else IntegerExprUseContext.ASSIGN_ON_MATCH, target)
+            value = self._generate_code_for_int_expr(action.value_expr, ctx, target)
             result.add(f"state->c.{target.name} = {value};")
         elif isinstance(action, SetToStr):
             # Check if we need to allocate
@@ -3504,7 +3510,7 @@ class CodegenCtx:
             result.add("else {")
             with result as body:
                 target_expression = "inval" if isinstance(action, AppendTo) else self._generate_code_for_int_expr(
-                    action.append_value, IntegerExprUseContext.ASSIGN_INITIAL if is_start else IntegerExprUseContext.ASSIGN_ON_MATCH, OutputStorage(OutputStorageType.INT, "$appendctx")
+                    action.append_value, ctx, OutputStorage(OutputStorageType.INT, "$appendctx")
                 )
                 body.add(f"state->c.{action.into_storage.name}[state->{action.into_storage.name}_counter++] = (char)({target_expression});")
                 body.add(f"state->c.{action.into_storage.name}[state->{action.into_storage.name}_counter] = 0;")
@@ -3648,7 +3654,7 @@ class CodegenCtx:
         for action in transition.actions:
             transition_body.add()
             transition_body.add(f"// action {action!r} ")
-            transition_body += self._generate_action_implementation(action)
+            transition_body += self._generate_action_implementation(action, is_end=from_end)
         # Check if we should fallthrough and generate a goto
         if transition.is_fallthrough:
             transition_body.add(f"// fallthrough")

@@ -1,0 +1,13 @@
+// args: -feof-support
+
+out bool ok;
+
+parser {
+    try {
+        end;
+        ok = true;
+    }
+    catch (nomatch) {
+        wait "asdf";
+    }
+}

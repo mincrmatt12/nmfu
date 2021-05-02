@@ -1,0 +1,18 @@
+out str[32] result;
+
+parser {
+    loop {
+        try {
+            result += /[a-z]+/;
+        }
+        catch (nomatch) {
+            case {
+                /[A-Z]/ -> {
+                    result += [$last + 32];
+                }
+            }
+        }
+        /[0-9]+/;
+        " ";
+    }
+}
