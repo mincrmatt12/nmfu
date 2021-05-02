@@ -64,7 +64,7 @@ def test_merge_with_regexes(re_matches, disjoint_example_map):
     obj._merge([disjoint_example_map[x].convert(defaultdict(lambda: None)) for x in re_matches], None)
 
 @example(b"tfa")  # this caused a bug before version 0.2.0
-@given(st.one_of(st.from_regex(x, fullmatch=True) for x in (DISJOINT_REGEX_EXAMPLE_KEYS + [b"..."])))
+@given(st.one_of(st.from_regex(x, fullmatch=True) for x in (DISJOINT_REGEX_EXAMPLE_KEYS + [b".{1-25}"])))
 def test_valid_end_states(disjoint_case_merged, disjoint_example_map, input_str):
     sub_dfa, cfs, vals = disjoint_case_merged 
     corresponding = None

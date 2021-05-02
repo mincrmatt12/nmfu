@@ -26,7 +26,9 @@ def match_fixture(request):
 @given(data=st.data())
 def test_regexes_match(data, match_fixture):
     dfa, pre, pattern = match_fixture
-    input_str = data.draw(st.one_of(st.from_regex(pattern, fullmatch=True), st.binary(min_size=2)))
+    input_str = data.draw(st.one_of(st.from_regex(pattern, fullmatch=True), *(
+        st.from_regex(x) for x in EXAMPLE_REGEXES
+    )))
 
     result = dfa.simulate([chr(x) for x in input_str])
     if pre.fullmatch(input_str):
