@@ -124,7 +124,11 @@ The _break-statement_ is explained along with loops in a later section.
 The _finish-statement_ causes the parser to immediately stop and return a `DONE` status code, which should be interpreted by the calling application as a termination condition.
 
 The _wait-statement_ spins and consumes input until the _match-expression_ provided matches successfully. Importantly, no event (including end of input!) can stop the
-wait statement, which makes it useful primarily in error handlers.
+wait statement, which makes it useful primarily in error handlers. 
+
+It is also important to note that this is _not_ the same as using a regex like `/.*someterminator/`, as
+the wait statement does _not_ "try" different starting positions for a string when its match fails. More concretely, something like `wait abcdabce` would _not_ match `abcdabcdabce`, as
+the statement would bail and restart matching from the beginning at the second `d`.
 
 ### Expressions
 
