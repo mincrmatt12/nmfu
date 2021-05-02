@@ -8,6 +8,7 @@ from collections import defaultdict
 
 EXAMPLE_REGEXES = [
     b"test",
+    br'(,\ ?([wW]\/)?"[^"]*")+',
     b"ter+t",
     b"as?s?df",
     br't[^ter"]*a',
