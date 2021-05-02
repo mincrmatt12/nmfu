@@ -420,6 +420,11 @@ class DFA:
                         return None
                     transition = position[action]
                     position = transition.target
+                    for action in transition.actions:
+                        if action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_OTHER:
+                            position = action.get_target_override_target()
+                        elif action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_UNDEFINED:
+                            return None
                     if not transition.is_fallthrough:
                         break
             except AttributeError:
@@ -2162,7 +2167,7 @@ class WaitMatch(Match):
         for state, trans in sm.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH], True):
             trans.to(sm.starting_state)
             if state == sm.starting_state:
-                trans.fallthrough(False)
+                trans.fallthrough(False).attach(*self.char_actions)
         return sm
 
 class EndMatch(Match):
@@ -3148,8 +3153,9 @@ class DfaCompileCtx:
 
         for state in self.dfa.states:
             for transition in state.transitions:
-                if transition.target == state and transition.is_fallthrough:
-                    raise IllegalDFAStateError("Inifinite loop due to self-referential fallthrough", transition)
+                if transition.target == state and transition.is_fallthrough and not any(x.get_target_override_mode() in [
+                    ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.ALWAYS_GOTO_UNDEFINED] and x.get_target_override_target() != state for x in transition.actions):
+                    raise IllegalDFAStateError("Infinite loop due to self-referential fallthrough", transition)
         
 
     def compile(self):

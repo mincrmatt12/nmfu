@@ -1,0 +1,10 @@
+parser {
+    loop {
+        try {
+            "hello there";
+        }
+        catch (nomatch) {
+            finish;
+        }
+    }
+}

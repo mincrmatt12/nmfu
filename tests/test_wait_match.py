@@ -7,8 +7,9 @@ def verify_fall(dfa):
         for transition in state.transitions:
             assert not (transition.target == state and transition.is_fallthrough)
 
-def test_simple_wait():
-    sub_match = nmfu.DirectMatch("terminate")
+@pytest.mark.parametrize("subtype", [nmfu.DirectMatch, nmfu.CaseDirectMatch])
+def test_simple_wait(subtype):
+    sub_match = subtype("terminate")
 
     match = nmfu.WaitMatch(sub_match)
     dfa = match.convert(defaultdict(lambda: None))
