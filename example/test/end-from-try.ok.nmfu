@@ -1,0 +1,21 @@
+// args: -O3 -feof-support
+
+out enum{C1, C2, C3} type;
+
+parser {
+    try {
+        "content";
+        type = C1;
+    }
+    catch (nomatch) {
+        case {
+            else -> {
+                wait end;
+                type = C2;
+            }
+            end -> {
+                type = C3;
+            }
+        }
+    }
+}

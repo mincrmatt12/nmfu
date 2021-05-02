@@ -206,12 +206,7 @@ class DFTransition:
     Else = type('_DFElse', (), {'__repr__': lambda x: "Else"})()
     End = type('_DFEnd', (), {'__repr__': lambda x: "End"})()
 
-    def __init__(self, on_values=None, conditions=None, fallthrough=False):
-        if conditions is None:
-            self.conditions = []
-        else:
-            self.conditions = conditions
-
+    def __init__(self, on_values=None, fallthrough=False):
         if type(on_values) is not list:
             if type(on_values) is str or on_values in [DFTransition.Else, DFTransition.End]:
                 on_values = [on_values]
@@ -228,7 +223,6 @@ class DFTransition:
     def copy(self):
         my_copy = DFTransition()
         my_copy.on_values = self.on_values.copy()
-        my_copy.conditions = self.conditions.copy()
         my_copy.actions = self.actions.copy()
         my_copy.target = self.target
         my_copy.is_fallthrough = self.is_fallthrough
@@ -239,10 +233,6 @@ class DFTransition:
             return f"<DFTransition on={self.on_values} to={self.target} actions={self.actions} fallthough={self.is_fallthrough}>"
         else:
             return f"<DFTransition on={self.on_values} to={self.target} fallthough={self.is_fallthrough}>"
-
-    def restrict(self, *conditions):
-        self.conditions.extend(conditions)
-        return self
 
     def attach(self, *actions, prepend=False):
         if prepend:
@@ -263,8 +253,8 @@ class DFTransition:
         return self
 
     @classmethod
-    def from_key(cls, on_values, conditions, inherited):
-        return cls(on_values, conditions).to(inherited.target).attach(*inherited.actions).fallthrough(inherited.is_fallthrough)
+    def from_key(cls, on_values, inherited):
+        return cls(on_values).to(inherited.target).attach(*inherited.actions).fallthrough(inherited.is_fallthrough)
 
 class DFState:
     all_states = {}
@@ -285,7 +275,7 @@ class DFState:
 
         contained = None
         for i in self.all_transitions():
-            if i.conditions == transition.conditions and (set(i.on_values) & set(transition.on_values)):
+            if set(i.on_values) & set(transition.on_values):
                 contained = i
                 break
         if contained is not None and (contained.target != transition.target or contained.is_fallthrough != transition.is_fallthrough):
@@ -304,7 +294,7 @@ class DFState:
 
         # Check if we can "inline" this transition
         for transition_in in self.transitions:
-            if transition_in.conditions == transition.conditions and transition_in.actions == transition.actions and transition_in.target == transition.target and transition_in.is_fallthrough == transition.is_fallthrough:
+            if transition_in.actions == transition.actions and transition_in.target == transition.target and transition_in.is_fallthrough == transition.is_fallthrough:
                 if DFTransition.Else in transition_in.on_values or DFTransition.Else in transition.on_values:
                     transition_in.on_values = [DFTransition.Else]
                 else:
@@ -316,33 +306,30 @@ class DFState:
     def all_transitions(self) -> Iterable[DFTransition]:
         yield from self.transitions
 
-    def all_transitions_for(self, on_values, conditions=None):
-        if conditions is None:
-            conditions = []
-
+    def all_transitions_for(self, on_values):
         for i in self.transitions:
-            if len(set(i.on_values) & set(on_values)) and i.conditions == conditions:
+            if len(set(i.on_values) & set(on_values)):
                 yield i
 
     def __setitem__(self, key, data):
-        if type(key) in (tuple, list):
-            on_values, conditions = key
+        if type(key) in (tuple, list, set, frozenset):
+            on_values = key
         else:
-            on_values, conditions = key, []
+            on_values = [key]
 
         if type(data) is DFTransition:
-            self.transition(DFTransition.from_key(on_values, conditions, data), True)
+            self.transition(DFTransition.from_key(on_values, data), True)
         else:
-            self.transition(DFTransition(on_values, conditions).to(data), True)
+            self.transition(DFTransition(on_values).to(data), True)
 
     def __delitem__(self, key):
-        if type(key) in (tuple, list):
-            on_values, conditions = key
+        if type(key) in (tuple, list, set, frozenset):
+            on_values = key
         else:
-            on_values, conditions = key, []
+            on_values = [key]
         contained = None
         for i in self.all_transitions():
-            if i.conditions == conditions and (set(i.on_values) & set(on_values)):
+            if set(i.on_values) & set(on_values):
                 contained = i
                 break
         if contained is not None:
@@ -358,14 +345,8 @@ class DFState:
         """
         Get the transition that would be followed for data, including Else if applicable
         """
-        if type(data) in (tuple, list):
-            for i in self.all_transitions():
-                if not i.on_values:
-                    continue
-                if (data[0] in i.on_values) if type(data[0]) is not set else data[0] <= set(i.on_values) and data[1] == i.conditions:
-                    return i
-            return self[DFTransition.Else]
-        elif type(data) in (set, frozenset):
+        if type(data) in (list, tuple, set, frozenset):
+            data = frozenset(data)
             for i in self.all_transitions():
                 if not i.on_values:
                     continue
@@ -402,18 +383,14 @@ class DFA:
         else:
             self.accepting_states.append(state)
 
-    def simulate(self, actions, condition_states=None):
+    def simulate(self, actions):
         """
         Attempt to simulate what would happen given the input states.
         Conditions are treated as always false, although a dictionary of {condition: value} can be provided
         """
 
-        if condition_states is None:
-            condition_states = [defaultdict(lambda: False) for x in actions]
-
         position = self.starting_state
-        for action, _ in zip(actions, condition_states):
-            # TODO: conditions
+        for action in actions:
             try:
                 while True:
                     if position is None:
@@ -2313,12 +2290,6 @@ class CaseNode(Node):
 
         new_dfa = DFA()
 
-        for dfa in ds:
-            for state in dfa.states:
-                for trans in state.transitions:
-                    if trans.conditions:
-                        raise IllegalDFAStateError("Conditions are not allowed in case matches", state)
-
         converted_states = {}
         corresponding_finish_states = {dfa: [] for dfa in ds}
         to_process = queue.Queue()
@@ -3635,13 +3606,7 @@ class CodegenCtx:
 
         result = " || ".join(checks)
 
-        condition_strs = [self._generate_condition_for_transition_condition(x) for x in transition.conditions]
-        if condition_strs:
-            result = f"({result}) && {' && '.join(condition_strs)}"
         return result
-
-    def _generate_condition_for_transition_condition(self, trans_condition):
-        return "false"
 
     def _generate_transition_body(self, transition: DFTransition, from_end=False):
         transition_body = Outputter()
@@ -3685,7 +3650,6 @@ class CodegenCtx:
         result = Outputter()
 
         # Split transitions into else groups
-        else_transitions = list(x for x in state.transitions if DFTransition.Else in x.on_values and x.conditions)
         try:
             actual_else_transition = next(state.all_transitions_for((DFTransition.Else,)))
         except StopIteration:
@@ -3695,7 +3659,7 @@ class CodegenCtx:
         generated_if = False
         
         # Create all transition if cases
-        for j, transition in enumerate((x for x in state.transitions if x not in else_transitions and x != actual_else_transition)):
+        for j, transition in enumerate((x for x in state.transitions if x != actual_else_transition)):
             cond_name = "else if"
             conditions = self._generate_condition_for_transition(transition)
             if not conditions:
@@ -3707,14 +3671,6 @@ class CodegenCtx:
             with result as transition_body:
                 transition_body += self._generate_transition_body(transition)
             result.add("}")
-
-        for j, transition in enumerate(else_transitions):
-            cond_name = "else if"
-            if not generated_if:
-                generated_if = True
-                cond_name = "if"
-            # TODO: condition else
-            result.add(f"{cond_name} (/* todo conditions */ false) {{}}")
 
         if actual_else_transition:
             if generated_if:
@@ -3766,24 +3722,12 @@ class CodegenCtx:
         result = Outputter()
 
         # Find all transitions that operate on End
-        end_transitions = list(x for x in state.transitions if DFTransition.End in x.on_values and x.conditions)
-        try:
-            unconditional_end_transition = next(state.all_transitions_for((DFTransition.End,)))
-        except StopIteration:
-            unconditional_end_transition = None
+        unconditional_end_transition = state[DFTransition.End]
 
         result.add("// possible end transitions")
         generated_if = False
         
         # Create all transitions for possible conditions
-        for j, transition in enumerate(end_transitions):
-            cond_name = "else if"
-            if j == 0 and not generated_if:
-                generated_if = True
-                cond_name = "if"
-            # TODO: condition else
-            result.add(f"{cond_name} (/* todo conditions */ false) {{}}")
-
         if unconditional_end_transition:
             if generated_if:
                 result.add("else {")

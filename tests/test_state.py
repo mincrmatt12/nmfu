@@ -20,14 +20,14 @@ def test_set_getitem():
     s2 = nmfu.DFState()
 
     s1["a"] = s2
-    s1[[["a", "b"], []]] = s1
+    s1[["a", "b"]] = s1
 
     assert s1["a"].target == s1
     assert s1["b"].target == s1
 
     s1 = nmfu.DFState()
-    s1[[["a", "b", "c", "d"], []]] = s2
-    s1[[["b", "c"], []]] = s1
+    s1[["a", "b", "c", "d"]] = s2
+    s1[["b", "c"]] = s1
 
     assert s1["a"].target == s2
     assert s1["b"].target == s1
