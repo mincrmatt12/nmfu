@@ -259,21 +259,26 @@ catch (outofspace) {
 The regex grammar in NMFU is
 
 ```
-regex: "/" regex_component* "/"
+regex: "/" regex_alternation "/"
 
 regex_char_class: "\\" REGEX_CHARCLASS
 
-?regex_component: REGEX_UNIMPORTANT -> regex_raw_match // creates multiple char classes
-                | regex_char_class // creates a char class
-                | regex_component REGEX_OP -> regex_operation
-                | "(" regex_component+ ")" -> regex_group
-                | regex_component "{" NUMBER "}" -> regex_exact_repeat
-                | regex_component "{" NUMBER "," NUMBER "}" -> regex_range_repeat
-                | regex_component "{" NUMBER "," "}" -> regex_at_least_repeat
-                | "[^" regex_set_element+ "]" -> regex_inverted_set // creates an inverted char class
-                | "[" regex_set_element+ "]" -> regex_set // creates a char class
-                | "." -> regex_any // creates an inverted char class
-                | regex_component "|" regex_component ("|" regex_component)* -> regex_alternation
+?regex_alternation: regex_group ("|" regex_group)*
+
+?regex_group: regex_alternation_element+
+
+?regex_alternation_element: regex_literal
+                          | regex_literal REGEX_OP -> regex_operation
+                          | regex_literal "{" NUMBER "}" -> regex_exact_repeat
+                          | regex_literal "{" NUMBER "," NUMBER "}" -> regex_range_repeat
+                          | regex_literal "{" NUMBER "," "}" -> regex_at_least_repeat
+
+?regex_literal: REGEX_UNIMPORTANT -> regex_raw_match // creates multiple char classes
+              | regex_char_class // creates a char class
+              | "(" regex_alternation ")" -> regex_group
+              | "[^" regex_set_element+ "]" -> regex_inverted_set // creates an inverted char class
+              | "[" regex_set_element+ "]" -> regex_set // creates a char class
+              | "." -> regex_any // creates an inverted char class
 
 ?regex_set_element: REGEX_CHARGROUP_ELEMENT_RAW
                   | REGEX_CHARGROUP_ELEMENT_RAW "-" REGEX_CHARGROUP_ELEMENT_RAW -> regex_set_range
@@ -285,8 +290,6 @@ REGEX_CHARGROUP_ELEMENT_RAW: /[^\-\]\\\/]|\\-|\\\]|\\\\|\\\//
 REGEX_CHARCLASS: /[wWdDsSntr ]/
 ```
 
-although it should be noted that the `{1-4}` style syntax is not currently implemented.
-
 NMFU regexes support the following common features:
 
 - matching characters
@@ -296,6 +299,7 @@ NMFU regexes support the following common features:
 - the wildcard dot
 - groups
 - alternation (also called OR) (`abc|def`)
+- repetition
 
 There are some key differences though:
 

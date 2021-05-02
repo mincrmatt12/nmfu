@@ -16,7 +16,8 @@ EXAMPLE_REGEXES = [
     br"yar.le",
     br"[abci-p][^def][^ghi][\w]\s",
     br"(te|r)y",
-    br"asdf|test+(ab)*"
+    br"asdf|test+(ab)*",
+    br"\d{3}|[abc]{3,}|[def]{3,5}",
 ]
 
 @pytest.fixture(scope="module", params=EXAMPLE_REGEXES)

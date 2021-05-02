@@ -1919,7 +1919,7 @@ class RegexMatch(Match):
             r.sub_match = self._simplify_regex_tree(r.sub_match)
             return r
         return r
-    
+
     def _interpret_parse_tree(self, regex_tree: lark.Tree):
         if regex_tree.data in ("regex", "regex_group"):
             return RegexSequence(self._interpret_parse_tree(x) for x in regex_tree.children)
@@ -1938,6 +1938,22 @@ class RegexMatch(Match):
             ProgramData.imbue(val, DebugTag.SOURCE_LINE, regex_tree.children[1].line)
             ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, regex_tree.children[1].column)
             return val
+        elif regex_tree.data == "regex_exact_repeat":
+            repeated_match = self._interpret_parse_tree(regex_tree.children[0])
+            repeat_times   = int(regex_tree.children[1].value)
+            return RegexSequence(itertools.repeat(repeated_match, repeat_times))
+        elif regex_tree.data == "regex_at_least_repeat":
+            repeated_match = self._interpret_parse_tree(regex_tree.children[0])
+            repeat_times   = int(regex_tree.children[1].value)
+            return RegexSequence([repeated_match for x in range(repeat_times)] + [RegexKleene(repeated_match)])
+        elif regex_tree.data == "regex_range_repeat":
+            repeated_match = self._interpret_parse_tree(regex_tree.children[0])
+            repeat_times_min = int(regex_tree.children[1].value)
+            repeat_times_max = int(regex_tree.children[2].value)
+            return RegexSequence(itertools.chain(
+                itertools.repeat(repeated_match, repeat_times_min),
+                itertools.repeat(RegexOptional(repeated_match), repeat_times_max - repeat_times_min)
+            ))
         else:
             raise NotImplementedError("don't handle {} yet".format(regex_tree.data))
 
