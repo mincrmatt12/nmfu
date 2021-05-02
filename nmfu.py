@@ -44,7 +44,7 @@ except ImportError:
         
         LarkError = RuntimeError
 from collections import defaultdict
-from typing import List, Optional, Iterable, Dict, Union, Set
+from typing import List, Optional, Iterable, Dict, Union, Set, Tuple
 try:
     import graphviz
     debug_enabled = True
@@ -1197,7 +1197,17 @@ class Node(abc.ABC):
     def convert(self, current_error_handlers: dict) -> DFA:
         return None
 
-class ActionNode(Node):
+class ActionSourceNode:
+    def adopt_actions_from(self) -> Tuple[List[Action], Node]:
+        """
+        Adopt the actions from this node, returning the actions that should be adopted and
+        the new node which should be used instead of this node. If adopting is _not_ destructive,
+        this should just return self
+        """
+
+        return [], self
+
+class ActionNode(Node, ActionSourceNode):
     """
     An ephemeral node which represents a single node. There is guaranteed to only be one of these at any time and
     only as the topmost node in a stack
@@ -1208,10 +1218,10 @@ class ActionNode(Node):
         self.next = None
 
     def set_next(self, next_node):
-        if isinstance(next_node, ActionNode):
+        if isinstance(next_node, ActionSourceNode):
             # adopt this node
-            self.actions.extend(next_node.actions)
-            self.next = next_node.get_next()
+            new_actions, self.next = next_node.adopt_actions_from()
+            self.actions.extend(new_actions)
         else:
             # just set next
             self.next = next_node
@@ -1221,6 +1231,10 @@ class ActionNode(Node):
 
     def convert(self, *args):
         raise IllegalASTStateError("Action not inherited by a match left in AST", self)
+
+    def adopt_actions_from(self):
+        actions = self.actions
+        return actions, self.next
 
 class ActionSinkNode(Node):
     """
@@ -1240,9 +1254,10 @@ class ActionSinkNode(Node):
         pass
 
     def set_next(self, next_node):
-        if isinstance(next_node, ActionNode):
-            self._adopt_actions(next_node.actions)
-            self._set_next(next_node.get_next())
+        if isinstance(next_node, ActionSourceNode):
+            actions, new_next = next_node.adopt_actions_from()
+            self._adopt_actions(actions)
+            self._set_next(new_next)
         else:
             self._set_next(next_node)
 
@@ -2249,13 +2264,15 @@ class CaseNode(Node):
         to_replace = []
 
         for sub_matches, target in self.sub_matches.items():
-            if not isinstance(target, ActionNode):
+            if not isinstance(target, ActionSourceNode):
                 continue
 
+            actions, new_next = target.adopt_actions_from()
+
             # adopt into our internal list
-            self.case_match_actions.update({sub_matches: target.actions})
-            if target.get_next() is not None:
-                self.sub_matches[sub_matches] = target.get_next()
+            self.case_match_actions.update({sub_matches: actions})
+            if new_next is not None:
+                self.sub_matches[sub_matches] = new_next
             else:
                 to_replace.append(sub_matches)
 
@@ -2410,18 +2427,18 @@ class CaseNode(Node):
         return self.next
 
     def set_next(self, next_node):
-        if isinstance(next_node, ActionNode):
-            our_next_node = next_node.get_next()
-            next_node.set_next(None)
+        if isinstance(next_node, ActionSourceNode):
+            actions, our_next_node = next_node.get_next()
             for sub_ast in self.sub_matches.values():
                 # Go to end of sub_ast
                 while sub_ast.get_next() is not None:
                     sub_ast = sub_ast.get_next()
 
                 # Adopt it
-                sub_ast.set_next(next_node)
+                new_action_node = ActionNode(*actions)
+                sub_ast.set_next(new_action_node)
             for empty_match in self.empty_matches:
-                self.case_match_actions[empty_match].extend(next_node.actions)
+                self.case_match_actions[empty_match].extend(actions)
             self.next = our_next_node
         else:
             self.next = next_node
@@ -2588,9 +2605,8 @@ class LoopNode(ActionSinkNode, HasDefaultDebugInfo):
         return self.break_action
 
     def set_child(self, child: Node):
-        if isinstance(child, ActionNode):
-            self.after_break_actions = child.actions
-            child = child.get_next()
+        if isinstance(child, ActionSourceNode):
+            self.after_break_actions, child = child.adopt_actions_from()
         self.child_node = child
 
     def convert(self, current_error_handlers):
@@ -2638,7 +2654,7 @@ class LoopNode(ActionSinkNode, HasDefaultDebugInfo):
 
         return sub_dfa
 
-class TryExceptNode(ActionSinkNode):
+class TryExceptNode(ActionSinkNode, ActionSourceNode):
     def __init__(self, handles):
         self.handler_node = DFState()
         self.handles = handles
@@ -2651,19 +2667,21 @@ class TryExceptNode(ActionSinkNode):
 
         self.next = None
 
+    def adopt_actions_from(self):
+        actions = self.incoming_body_actions
+        return actions, self
+
     def get_handler(self):
         return self.handler_node
 
     def set_body(self, body):
-        if isinstance(body, ActionNode):
-            self.incoming_body_actions = body.actions
-            body = body.get_next()
+        if isinstance(body, ActionSourceNode):
+            self.incoming_body_actions, body = body.adopt_actions_from()
         self.body = body
 
     def set_handler(self, handler):
-        if isinstance(handler, ActionNode):
-            self.incoming_handler_actions = handler.actions
-            handler = handler.get_next()
+        if isinstance(handler, ActionSourceNode):
+            self.incoming_handler_actions, handler = handler.adopt_actions_from()
         self.handler = handler
 
     def _adopt_actions(self, actions):
@@ -2687,10 +2705,6 @@ class TryExceptNode(ActionSinkNode):
         body_error_handlers.update({x: self.handler_node for x in self.handles})
 
         sub_dfa: DFA = self.body.convert(body_error_handlers)
-
-        # Add the incoming_body_actions array to all incoming actions
-        for trans in sub_dfa.starting_state.transitions:
-            trans.attach(*self.incoming_body_actions)
 
         def add_finish_to(dfa):
             if any(any(x.target in dfa.accepting_states for x in y.all_transitions()) for y in dfa.accepting_states) and any(x.is_timing_strict() for x in self.after_actions):
@@ -2769,9 +2783,8 @@ class ParseCtx:
         parser_decl = next(self._parse_tree.find_data("parser_decl"))
         self.ast = self._parse_stmt_seq(parser_decl.children)
 
-        if isinstance(self.ast, ActionNode):
-            self.start_actions = self.ast.actions
-            self.ast = self.ast.get_next()
+        if isinstance(self.ast, ActionSourceNode):
+            self.start_actions, self.ast = self.ast.adopt_actions_from()
 
     def _convert_string(self, escaped_string: str):
         """
@@ -4002,9 +4015,6 @@ def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=Non
 
             handler_start = make_id()
             c.node(handler_start, "catch " + ",".join(x.value for x in ast.handles), color="orange")
-
-            if ast.incoming_body_actions:
-                c.node(make_id(), f"start: " + ",".join(label_of(x) for x in ast.incoming_body_actions), style="filled", color="white")
 
             if ast.incoming_handler_actions:
                 c.node(make_id(), f"hstart: " + ",".join(label_of(x) for x in ast.incoming_handler_actions), style="filled", color="white")
