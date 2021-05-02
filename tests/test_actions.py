@@ -44,8 +44,6 @@ def test_wait_match_action_binding():
     errs = nmfu.DFState()
     dfa: nmfu.DFA = match.convert(collections.defaultdict(lambda: errs))
 
-    nmfu.debug_dump_dfa(dfa)
-
     # fallthrough actions are ignored because they will hopefully wind up parsing something real
     assert all(act in x.actions or x.is_fallthrough for x in dfa.transitions_pointing_to(dfa.starting_state))
 
