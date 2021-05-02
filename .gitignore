@@ -17,3 +17,6 @@ AppDir/
 
 appimage-builder-cache/
 .pytest_cache/
+
+.coverage
+htmlcov/
