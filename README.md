@@ -29,7 +29,7 @@ At the top-level, all NMFU parsers consist of a set of output-variables, macro-d
 
 The output-variables are specified with the _output-declaration_:
 
-```
+```lark
 out_decl: "out" out_type IDENTIFIER ";"
         | "out" out_type IDENTIFIER "=" atom ";"
 
@@ -55,7 +55,7 @@ All strings have a defined maximum size, which includes the null-terminator.
 
 Macros in NMFU are simple parse-tree level replacements. They do not support arguments, and look like:
 
-```
+```lark
 macro_decl: "macro" IDENTIFIER "{" statement* "}"
 ```
 
@@ -74,7 +74,7 @@ declaration to the call-site. Note that although macros can call other macros, t
 
 Hooks (which are callbacks to user code which the parser can call at certain points) are defined with a _hook-declaration_:
 
-```
+```lark
 hook_decl: "hook" IDENTIFIER ";"
 ```
 
@@ -88,7 +88,7 @@ hook got_header;
 
 The parser proper is declared with the _parser-declaration_,
 
-```
+```lark
 parser_decl: "parser" "{" statement+ "}"
 ```
 
@@ -98,7 +98,7 @@ and contains a set of statements which are "executed" in order to parse the inpu
 
 Basic statements are statements which do not have an associated code block, and which end with a semicolon.
 
-```
+```lark
 simple_stmt: expr -> match_stmt
            | IDENTIFIER "=" expr -> assign_stmt
            | IDENTIFIER "+=" expr -> append_stmt
@@ -132,7 +132,7 @@ There are three types of expressions in NMFU, _match-expressions_, _integer-expr
 
 A _match-expression_ is anything that can consume input to the parser and check it:
 
-```
+```lark
 ?expr: atom // string match
      | regex // not an atom to simplify things
      | "end" -> end_expr
@@ -152,7 +152,7 @@ The _regex-expression_ matches a subset of regexes. The quirks of the regex dial
 
 An _integer-expression_ is anything that can be directly assigned to an output variable, **including strings**:
 
-```
+```lark
 ?expr: atom 
      | "[" sum_expr "]"
 
@@ -165,7 +165,7 @@ atom: BOOL_CONST -> bool_const
 The only two kinds of _integer-expressions_ are _literal-expressions_, which are just literal strings, integers, enumeration constants (which are resolved
 based on the context and which _output-variable_ is being assigned) and booleans ("true"/"false"); and _math-expressions_, which are surrounded in square brackets:
 
-```
+```lark
 ?sum_expr: mul_expr (SUM_OP mul_expr)*
 ?mul_expr: math_atom (MUL_OP math_atom)*
 ?math_atom: NUMBER -> math_num
@@ -194,7 +194,7 @@ content_length = [content_length * 10 + ($last - 48)]; // the codepoint for '0'
 
 Block statements are statements which contain a block of other statements:
 
-```
+```lark
 block_stmt: "loop" IDENTIFIER? "{" statement+ "}" -> loop_stmt
           | "case" "{" case_clause+ "}" -> case_stmt
           | "optional" "{" statement+ "}" -> optional_stmt
@@ -258,7 +258,7 @@ catch (outofspace) {
 
 The regex grammar in NMFU is
 
-```
+```lark
 regex: "/" regex_alternation "/"
 
 regex_char_class: "\\" REGEX_CHARCLASS
