@@ -15,7 +15,7 @@ def test_illegal_transitions():
         s1.transition(nmfu.DFTransition(["a"]).to(s2).fallthrough())
     s1.transition(nmfu.DFTransition(["b"]).to(s2))
 
-def test_set_getitem():
+def test_set_get_delitem():
     s1 = nmfu.DFState()
     s2 = nmfu.DFState()
 
@@ -32,6 +32,18 @@ def test_set_getitem():
     assert s1["a"].target == s2
     assert s1["b"].target == s1
     assert s1["d"].target == s2
+    assert s1[["b", "c"]].target == s1
+    assert s1[["a", "b", "c", "d"]] is None
+
+    del s1["b"]
+
+    assert s1["b"] is None
+    assert s1["c"].target == s1
+    assert len(s1["c"].on_values) == 1
+
+    del s1["c"]
+
+    assert s1["c"] is None
 
 def test_dfa_append_after_simple():
     error_state = nmfu.DFState()
