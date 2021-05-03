@@ -1,0 +1,10 @@
+out str[32] bad;
+
+parser {
+    foreach {
+        "big statement"i;
+    } do {
+        bad += [2];
+        bad += /./;
+    }
+}

@@ -88,6 +88,9 @@ block_stmt: "loop" IDENTIFIER? "{" statement+ "}" -> loop_stmt
           | "case" "{" case_clause+ "}" -> case_stmt
           | "optional" "{" statement+ "}" -> optional_stmt
           | "try" "{" statement+ "}" catch_block -> try_stmt
+          | "foreach" "{" statement+ "}" "do" "{" foreach_actions "}" -> foreach_stmt
+
+foreach_actions: statement+
 
 catch_block: "catch" catch_options? "{" statement* "}"
 
@@ -493,6 +496,11 @@ class DFA:
     def append_after(self, chained_dfa: "DFA", treat_as_else: Union[DFState, List[DFState]], sub_states=None, mark_accept=True, chain_actions=None):
         """
         Add the chained_dfa in such a way that its start state "becomes" all of the `sub_states` (or if unspecified, the accept states of _this_ dfa)
+
+        If mark_accept is True, we should replace the accept states that we currently have with corresponding ones based on the chained dfa.
+        If chain_actions is not empty, we add those actions to all new transitions. This does _not_ create potential ambiguity, as the original start
+        states of chained DFAs are kept in-tact, so loops work properly. In other wors, chain_actions will only be run once and so is a suitable mechanism
+        for adding finish actions.
         """
 
         if sub_states is None:
@@ -2706,36 +2714,75 @@ class TryExceptNode(ActionSinkNode, ActionSourceNode):
 
         sub_dfa: DFA = self.body.convert(body_error_handlers)
 
-        def add_finish_to(dfa):
-            if any(any(x.target in dfa.accepting_states for x in y.all_transitions()) for y in dfa.accepting_states) and any(x.is_timing_strict() for x in self.after_actions):
-                raise IllegalASTStateError("Unable to schedule finish action for try-except at strict time", dfa)
-
-            for trans in itertools.chain(*(dfa.transitions_pointing_to(x) for x in dfa.accepting_states)):
-                trans.attach(*self.after_actions)
-
-        add_finish_to(sub_dfa)
-
         # This _should_ have transitions going to the handler node. Add it to the tree now
         sub_dfa.add(self.handler_node)
 
         # If there _is_ a handler, add it after
         if self.handler is not None:
             handler_dfa = self.handler.convert(current_error_handlers)
-            add_finish_to(handler_dfa)
             sub_dfa.append_after(handler_dfa, current_error_handlers[ErrorReasons.NO_MATCH], sub_states=[self.handler_node], chain_actions=self.incoming_handler_actions)
         else:
             # Otherwise, just mark the handler as a finish state
             sub_dfa.mark_accepting(self.handler_node)
             # And add the finish actions to everything that pointed at it
             for trans in sub_dfa.transitions_pointing_to(self.handler_node):
-                trans.attach(*self.incoming_handler_actions).attach(*self.after_actions)
+                trans.attach(*self.incoming_handler_actions)
 
         # If there is a next node, append it
         if self.next is not None:
-            sub_dfa.append_after(self.next.convert(current_error_handlers), [current_error_handlers[ErrorReasons.NO_MATCH], self.handler_node])
+            sub_dfa.append_after(self.next.convert(current_error_handlers), [current_error_handlers[ErrorReasons.NO_MATCH], self.handler_node], chain_actions=self.after_actions)
 
         return sub_dfa
 
+class ForeachNode(ActionSinkNode, ActionSourceNode):
+    def __init__(self, child_node: Node, each_actions: List[Action]):
+        self.each_actions = each_actions
+        self.child_node = child_node
+        self.after_actions: List[Action] = []
+        self.incoming_body_actions: List[Action] = []
+        self.next: Node = None
+
+        if isinstance(child_node, ActionSourceNode):
+            self.incoming_body_actions, self.child_node = child_node.adopt_actions_from()
+
+    def _adopt_actions(self, actions):
+        if any(x.get_mode() != ActionMode.AT_FINISH for x in actions):
+            raise IllegalASTStateError("Invalid action type following foreach", self)
+            
+        self.after_actions.extend(actions)
+
+    def adopt_actions_from(self):
+        actions = self.incoming_body_actions
+        return actions, self
+
+    def _set_next(self, node):
+        self.next = node
+
+    def get_next(self):
+        return self.next
+
+    def convert(self, current_error_handlers):
+        if self.child_node is None:
+            raise IllegalASTStateError("Empty foreach body", self)
+
+        # Generate the DFA for the content of the foreach
+        sub_dfa: DFA = self.child_node.convert(current_error_handlers)
+
+        # Visit all transitions contained therein, ignoring ones going to error handlers,
+        # and attach our each eactions to them
+        # We specifically do this _before_ trying to attach after actions / the next node
+        ignored_targets = set(current_error_handlers.values())
+        for state in sub_dfa.states:
+            for transition in state.all_transitions():
+                if transition.target in ignored_targets:
+                    continue
+                transition.attach(*self.each_actions, prepend=True)
+
+        if self.next is not None:
+            sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH], chain_actions=self.after_actions)
+
+        return sub_dfa
+    
 class Macro:
     def __init__(self, name_token: lark.Token, parse_tree: lark.Tree):
         self.name = name_token.value
@@ -2931,7 +2978,10 @@ class ParseCtx:
             ProgramData.imbue(match, DebugTag.SOURCE_COLUMN, actual_content.column)
             return match
         elif expr.data == "regex":
-            return RegexMatch(expr)
+            match = RegexMatch(expr)
+            ProgramData.imbue(match, DebugTag.SOURCE_LINE, expr.line)
+            ProgramData.imbue(match, DebugTag.SOURCE_COLUMN, expr.column)
+            return match
         elif expr.data == "end_expr":
             if not ProgramData.do(ProgramFlag.EOF_SUPPORT):
                 raise IllegalParseTree("end match but EOF support is not enabled", expr)
@@ -3077,6 +3127,21 @@ class ParseCtx:
             self.exception_handlers = prior_error_reasons
 
             return try_node
+        elif stmt.data == "foreach_stmt":
+            action_block = stmt.children[-1]
+            contents     = stmt.children[:-1]
+
+            content_node = self._parse_stmt_seq(contents)
+            action_node  = self._parse_stmt_seq(action_block.children)
+
+            if not isinstance(action_node, ActionSourceNode):
+                raise IllegalASTStateError("Invalid statement in foreach actions; must only be an action source", action_node)
+
+            each_actions, action_node = action_node.adopt_actions_from()
+            if action_node is not None:
+                raise IllegalASTStateError("Invalid statement in foreach actions; must only be action source with no DFA", action_node)
+
+            return ForeachNode(content_node, each_actions)
         else:
             raise IllegalParseTree("Unknown statement", stmt)
 

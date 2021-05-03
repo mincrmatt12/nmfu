@@ -103,16 +103,12 @@ parser { // declare the actual parser
                 }
                 "Content-Length:"i -> {
                     ows();
-                    loop {
-                        case {
-                            "\r\n" -> {break;}
-                            /\d/ -> {
-                                // special variable: $last: last input, as integer (codepoint/raw value). Guaranteed in this case to be /d
-                                // TODO: should th
-                                content_size = [content_size * 10 + ($last - 48)]; // math
-                            }
-                        }
+                    foreach {
+                        /\d+/;
+                    } do {
+                        content_size = [content_size * 10 + ($last - 48)]; // math
                     }
+                    "\r\n";
                 }
                 else -> {
                     // Wait for a newline.
