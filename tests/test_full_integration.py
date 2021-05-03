@@ -79,3 +79,7 @@ def test_fail(filename):
     
     with pytest.raises(nmfu.NMFUError):
         common_run_int_test(pt)
+
+def test_help_doesnt_crash():
+    nmfu.ProgramData._print_help()
+    nmfu.ProgramData._print_help(show_all=True)
