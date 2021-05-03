@@ -31,7 +31,7 @@ import os
 import sys
 try:
     import lark
-except ImportError:
+except ImportError: # pragma: no cover
     print("... failed to import lark; must be in setup.py ...", file=sys.stderr)
     # Mock it
     class lark:
@@ -45,11 +45,11 @@ except ImportError:
         LarkError = RuntimeError
 from collections import defaultdict, Counter
 from typing import List, Optional, Iterable, Dict, Union, Set, Tuple
-try:
+try: # pragma: no cover
     import graphviz
     debug_enabled = True
     import lark.tree
-except ImportError:
+except ImportError: # pragma: no cover
     debug_enabled = False
 
 grammar = r"""
@@ -336,11 +336,8 @@ class DFState:
                 contained = i
                 break
         if contained is not None:
-            if type(on_values) in (set, frozenset):
-                for on_value in on_values:
-                    contained.on_values.remove(on_value)
-            else:
-                contained.on_values.remove(on_values)
+            for on_value in on_values:
+                contained.on_values.remove(on_value)
             if not contained.on_values:
                 self.transitions.remove(contained)
 
@@ -577,7 +574,7 @@ class ProgramFlag(int, enum.Enum):
     REMOVE_INACCESIBLE_STATES = 4
 
     # Codegen optimization options ('')
-    COLLAPSE_TRANSITION_RANGES = 9
+    COLLAPSE_TRANSITION_RANGES = (9, "Rewrite large transition values as codepoint range checks")
 
     # Codegen options 
     # |
@@ -717,7 +714,7 @@ class ProgramData:
         return -1
 
     @classmethod
-    def _print_version(cls):
+    def _print_version(cls): # pragma: no cover
         print("nmfu", __version__)
         print("Copyright (C) 2020-2021 Matthew Mirvish")
         print("This is free software; see the source for copying conditions.  There is NO")
@@ -745,7 +742,7 @@ class ProgramData:
                 if show_all:
                     yield i
                 else:
-                    if y.name.startswith("VERBOSE") or y.name.startswith("DEBUG"):
+                    if i.name.startswith("VERBOSE") or i.name.startswith("DEBUG"):
                         continue
                     yield i
 
@@ -2454,7 +2451,7 @@ class CaseNode(Node):
 
     def set_next(self, next_node):
         if isinstance(next_node, ActionSourceNode):
-            actions, our_next_node = next_node.get_next()
+            actions, our_next_node = next_node.adopt_actions_from()
             for sub_ast in self.sub_matches.values():
                 # Go to end of sub_ast
                 while sub_ast.get_next() is not None:
@@ -3888,7 +3885,7 @@ class CodegenCtx:
 # DEBUG DUMPERS
 # =============
 
-def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None):
+def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
     if not debug_enabled:
         raise RuntimeError("Debugging was disabled! You probably need to install graphviz")
 
@@ -3949,7 +3946,7 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None):
 
     g.render(out_name, format="pdf", cleanup=True)
 
-def debug_dump_regexnfa(nfa: RegexNFA, out_name="nfa"):
+def debug_dump_regexnfa(nfa: RegexNFA, out_name="nfa"): # pragma: no cover
     if not debug_enabled:
         raise RuntimeError("Debugging was disabled! You probably need to install graphviz")
 
@@ -3975,7 +3972,7 @@ def debug_dump_regexnfa(nfa: RegexNFA, out_name="nfa"):
 
     g.render(out_name, format="pdf", cleanup=True)
 
-def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=None, make_subgraph=None):
+def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=None, make_subgraph=None): # pragma: no cover
     if into is None:
         g = graphviz.Digraph(name='ast')
         g.attr(ranksep="0.01", rankdir="LR", labeljust="l")
@@ -4145,7 +4142,7 @@ def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=Non
         return debug_dump_ast(ast.get_next(), into=into, coming_from=coming_from, make_id=make_id, make_subgraph=make_subgraph)
     return coming_from
 
-def debug_dump_regextree(rx, indent=0):
+def debug_dump_regextree(rx, indent=0): # pragma: no cover
     def lprint(*args, **kwargs):
         print(" "*indent, end="")
         print(*args, **kwargs)
@@ -4166,7 +4163,7 @@ def debug_dump_regextree(rx, indent=0):
         lprint("optional")
         debug_dump_regextree(rx.sub_match, indent=indent+1)
 
-def main():
+def main(): # pragma: no cover
     try:
         input_file, program_name = ProgramData.load_commandline_flags(sys.argv[1:])
     except RuntimeError as e:
