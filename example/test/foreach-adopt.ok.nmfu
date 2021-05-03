@@ -1,0 +1,10 @@
+out int test;
+
+parser {
+    foreach {
+        test = 0;
+        "asdf";
+    } do {
+        test = [$last + test];
+    }
+}

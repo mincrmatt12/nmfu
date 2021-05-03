@@ -10,4 +10,5 @@ parser {
             wait "\r\n";
         }
     }
+    finish;
 }
