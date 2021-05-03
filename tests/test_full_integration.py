@@ -30,7 +30,7 @@ def test_full_integration(filename, options):
     nmfu.ProgramData.load_commandline_flags((*options, filename))
     nmfu.ProgramData.load_source(source)
 
-    pt = nmfu.parser.parse(source)
+    pt = nmfu.parser.parse(source, start="start")
 
     pctx = nmfu.ParseCtx(pt)
     pctx.parse()
@@ -66,7 +66,7 @@ def common_parse_int_test(filename):
     nmfu.ProgramData.load_commandline_flags(args)
     nmfu.ProgramData.load_source(source)
 
-    pt = nmfu.parser.parse(source)
+    pt = nmfu.parser.parse(source, start="start")
     return pt
 
 def common_run_int_test(pt):

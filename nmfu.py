@@ -183,7 +183,7 @@ COMMENT: /\s*\/\/[^\n]*/
 %ignore COMMENT
 """
 
-parser = lark.Lark(grammar, propagate_positions=True, lexer="dynamic_complete")
+parser = lark.Lark(grammar, propagate_positions=True, lexer="dynamic_complete", start=["start", "regex"])
 
 """
 NMFU operates in a few 'stages':
@@ -4190,7 +4190,7 @@ def main(): # pragma: no cover
 
     ProgramData.load_source(contents)
     try:
-        parse_tree = parser.parse(contents)
+        parse_tree = parser.parse(contents, start="start")
     except lark.LarkError as e:
         print("Syntax error:", str(e), file=sys.stderr)
         exit(3)
