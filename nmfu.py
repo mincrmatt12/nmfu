@@ -110,6 +110,7 @@ catch_options: "(" CATCH_OPTION ("," CATCH_OPTION)* ")"
 
 atom: BOOL_CONST -> bool_const
     | NUMBER -> number_const
+    | CHAR_CONSTANT -> char_const
     | STRING "i" -> string_case_const
     | STRING -> string_const
     | IDENTIFIER -> identifier_const
@@ -118,6 +119,7 @@ atom: BOOL_CONST -> bool_const
 ?mul_expr: math_atom (MUL_OP math_atom)*
 ?math_atom: NUMBER -> math_num
           | IDENTIFIER -> math_var
+          | CHAR_CONSTANT -> math_char_const
           | "$" IDENTIFIER -> builtin_math_var
           | "(" sum_expr ")"
 
@@ -170,6 +172,7 @@ REGEX_CHARCLASS: /[wWdDsSntr ]/
 // math
 SUM_OP: /[+-]/
 MUL_OP: /[*\/%]/
+CHAR_CONSTANT: /'.'/
 
 // comments
 
@@ -2912,6 +2915,8 @@ class ParseCtx:
 
         if expr.data == "math_num":
             return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(int(expr.children[0].value)), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
+        elif expr.data == "math_char_const":
+            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(ord(expr.children[0].value[1])), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
         elif expr.data == "math_var":
             try:
                 return ProgramData.imbue(ProgramData.imbue(OutIntegerExpr(self.state_object_spec[expr.children[0].value]), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
@@ -2944,6 +2949,11 @@ class ParseCtx:
             ProgramData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
             ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
             return val
+        elif expr.data == "char_const":
+            val = LiteralIntegerExpr(ord(expr.children[0].value[1]))
+            ProgramData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
+            ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
+            return val
         elif expr.data == "identifier_const":
             if into_storage is None:
                 raise IllegalParseTree("Undefined enumeration value, no into_storage", expr)
@@ -2970,7 +2980,7 @@ class ParseCtx:
                 return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr({"true": 1, "false": 0}[expr.children[0].value], result_type), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
             except KeyError as e:
                 raise UndefinedReferenceError("boolean constant", expr.children[0]) from e
-        elif expr.data in ["math_num", "math_var", "builtin_math_var", "sum_expr", "mul_expr"]:
+        elif expr.data in ["math_num", "math_var", "builtin_math_var", "sum_expr", "mul_expr", "math_char_const"]:
             return self._parse_math_expr(expr)
         else:
             raise IllegalParseTree("Invalid expression in integer expr", expr)

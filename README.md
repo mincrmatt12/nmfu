@@ -162,18 +162,20 @@ An _integer-expression_ is anything that can be directly assigned to an output v
 
 atom: BOOL_CONST -> bool_const
     | NUMBER -> number_const
+    | CHAR_CONSTANT -> char_const
     | STRING -> string_const
     | IDENTIFIER -> enum_const
 ```
 
-The only two kinds of _integer-expressions_ are _literal-expressions_, which are just literal strings, integers, enumeration constants (which are resolved
-based on the context and which _output-variable_ is being assigned) and booleans ("true"/"false"); and _math-expressions_, which are surrounded in square brackets:
+The only two kinds of _integer-expressions_ are _literal-expressions_, which are just literal strings, integers, character constants
+(which behave as they do in C, just becoming integers), enumeration constants (which are resolved based on the context and which _output-variable_ is being assigned) and booleans ("true"/"false"); and _math-expressions_, which are surrounded in square brackets:
 
 ```lark
 ?sum_expr: mul_expr (SUM_OP mul_expr)*
 ?mul_expr: math_atom (MUL_OP math_atom)*
 ?math_atom: NUMBER -> math_num
           | IDENTIFIER -> math_var
+          | CHAR_CONSTANT -> math_char_const
           | "$" IDENTIFIER -> builtin_math_var
           | "(" sum_expr ")"
 ```
@@ -191,7 +193,7 @@ The current list of _builtin-math-variables_ is:
 For example:
 
 ```
-content_length = [content_length * 10 + ($last - 48)]; // the codepoint for '0'
+content_length = [content_length * 10 + ($last - '0')];
 ```
 
 ### Block Statements

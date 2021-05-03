@@ -106,7 +106,7 @@ parser { // declare the actual parser
                     foreach {
                         /\d+/;
                     } do {
-                        content_size = [content_size * 10 + ($last - 48)]; // math
+                        content_size = [content_size * 10 + ($last - '0')]; // math
                     }
                     "\r\n";
                 }

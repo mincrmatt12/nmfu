@@ -1,0 +1,7 @@
+out int test;
+
+parser {
+    test = '4';
+    /\d/;
+    test = [$last - '0'];
+}
