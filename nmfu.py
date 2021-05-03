@@ -18,7 +18,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 """
 
-__version__ = "0.3.0a1"
+__version__ = "0.3.0a2"
 
 import abc
 import enum
