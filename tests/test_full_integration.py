@@ -11,15 +11,23 @@ import shlex
 # get list of examples
 
 example_files = glob.glob(os.path.join(os.path.dirname(__file__), "../example/*.nmfu"))
+example_flag_combos = [
+    ("-O3",),
+    ("-O2", "-finclude-user-ptr"),
+    ("-O2", "-fallocate-str-space-dynamic-on-demand"),
+    ("-O2", "-fallocate-str-space-dynamic-on-demand", "-fhook-per-state"),
+    ("-O2", "--collapsed-range-length", "6", "-fno-use-cplusplus-guard")
+]
 
 @pytest.mark.parametrize("filename", example_files)
-def test_full_integration(filename):
+@pytest.mark.parametrize("options", example_flag_combos)
+def test_full_integration(filename, options):
     # Effectively just run NMFU
 
     with open(filename) as f:
         source = f.read()
         
-    nmfu.ProgramData.load_commandline_flags(("-O3", filename))
+    nmfu.ProgramData.load_commandline_flags((*options, filename))
     nmfu.ProgramData.load_source(source)
 
     pt = nmfu.parser.parse(source)
@@ -35,6 +43,10 @@ def test_full_integration(filename):
     cctx.generate_source()
     
     # yay
+
+def test_param_conflicts():
+    with pytest.raises(RuntimeError, match="Conflict between"):
+        nmfu.ProgramData.load_commandline_flags(("-fallocate-str-space-in-struct", "-fallocate-str-space-dynamic", "dummy"))
 
 example_files_ok   = glob.glob(os.path.join(os.path.dirname(__file__), "../example/test/*.ok.nmfu"))
 example_files_fail = glob.glob(os.path.join(os.path.dirname(__file__), "../example/test/*.fail.nmfu"))
@@ -77,8 +89,10 @@ def test_fail(filename):
     # note that the files still should be valid syntax
     pt = common_parse_int_test(filename)
     
-    with pytest.raises(nmfu.NMFUError):
+    with pytest.raises(nmfu.NMFUError) as e:
         common_run_int_test(pt)
+
+    str(e)  # ensure error string generation is tested
 
 def test_help_doesnt_crash():
     nmfu.ProgramData._print_help()
