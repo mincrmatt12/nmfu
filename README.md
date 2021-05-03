@@ -205,6 +205,7 @@ block_stmt: "loop" IDENTIFIER? "{" statement+ "}" -> loop_stmt
           | "case" "{" case_clause+ "}" -> case_stmt
           | "optional" "{" statement+ "}" -> optional_stmt
           | "try" "{" statement+ "}" catch_block -> try_stmt
+          | "foreach" "{" statement+ "}" "do" "{" foreach_actions "}" -> foreach_stmt
 
 catch_block: "catch" catch_options? "{" statement* "}"
 
@@ -259,6 +260,20 @@ catch (outofspace) {
    // ... something to deal with this ...
 }
 ```
+
+_foreach-statements_ allow you to run various statements for every character read by some other set of statements. For example:
+
+```
+number = 0;
+foreach {
+   /\d+/;
+} do {
+   number = [number * 10 + ($last - '0')];
+}
+```
+
+which will read a number in base 10 and store it into a variable. It accomplishes this by executing `number = [number * 10 + ($last - '0')];` for each digit. Only
+statements which do _not_ consume any input themselves are allowed in the `do` section of a _foreach-statement_. 
 
 ### NMFU Regexes
 
