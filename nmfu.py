@@ -43,7 +43,7 @@ except ImportError:
             return None
         
         LarkError = RuntimeError
-from collections import defaultdict
+from collections import defaultdict, Counter
 from typing import List, Optional, Iterable, Dict, Union, Set, Tuple
 try:
     import graphviz
@@ -601,6 +601,9 @@ class ProgramFlag(int, enum.Enum):
     USE_PRAGMA_ONCE = (10, "Use #pragma once instead of an #ifndef guard in the header")
     USE_CPLUSPLUS_GUARD = (14, "Include a __cplusplus extern C guard", True)
 
+    # Debug options
+    DEBUG_DFA_HIDE_ERROR_HANDLING = (100, "", True)
+
 class ProgramOption(enum.Enum):
     def __init__(self, default, helpstr):
         self.default = default
@@ -610,6 +613,9 @@ class ProgramOption(enum.Enum):
 
     # Codegen options
     COLLAPSED_RANGE_LENGTH = (4, "Minimum length of range to collapse into range comparison")
+
+    # Debug options
+    DEBUG_DFA_HIDE_THRESHOLD = (15, "")
 
 class HasDefaultDebugInfo:
     def debug_lookup(self, tag: DebugTag):
@@ -718,7 +724,7 @@ class ProgramData:
         print("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.")
 
     @classmethod
-    def _print_help(cls):
+    def _print_help(cls, show_all=False):
         print("Usage: nmfu [options] input")
         print("")
         print("Global Options:")
@@ -729,20 +735,29 @@ class ProgramData:
         print("  --dump-prefix <arg>                        Write dumped pdfs to files starting with <arg> (default is program name)")
         print("  -t, --dry-run                              Only convert the input to a DFA (and possibly dump), don't generate code")
         print("  -h, --help                                 Show this help screen")
+        print("  --help-all                                 Show this help screen; showing hidden debug options")
         print("  --version                                  Show the version of nmfu")
         print("")
         print("Generation Options:")
-        pad_length = 4 + len(max(ProgramOption, key=lambda x: len(x.name)).name) + 6
-        for option in ProgramOption:
+        
+        def filter_options_for_all(options):
+            for i in options:
+                if show_all:
+                    yield i
+                else:
+                    if y.name.startswith("VERBOSE") or y.name.startswith("DEBUG"):
+                        continue
+                    yield i
+
+        pad_length = 4 + len(max(filter_options_for_all(ProgramOption), key=lambda x: len(x.name)).name) + 6
+        for option in filter_options_for_all(ProgramOption):
             flag_name = option.name.replace("_", "-").lower()
             opt_str = f"  --{flag_name} <arg>"
             print(f"{opt_str: <{pad_length}} {option.helpstr} (default: {option.default})")
         print("")
         print("Flags:")
-        pad_length = 2 + len(max((y for y in ProgramFlag if not y.name.startswith("VERBOSE") and cls._is_optimization_flag(y) == -1), key=lambda x: len(x.name)).name)
-        for flag in ProgramFlag:
-            if flag.name.startswith("VERBOSE"):
-                continue
+        pad_length = 2 + len(max((y for y in filter_options_for_all(ProgramFlag) if cls._is_optimization_flag(y) == -1), key=lambda x: len(x.name)).name)
+        for flag in filter_options_for_all(ProgramFlag):
             if cls._is_optimization_flag(flag) >= 0:
                 continue
             flag_name = flag.name.replace("_", "-").lower()
@@ -792,7 +807,7 @@ class ProgramData:
                     continue
                 elif option[1] == "-":
                     option_name = option[2:]
-                    if option_name not in ["help", "dry-run", "version"]:
+                    if option_name not in ["help", "dry-run", "version", "help-all"]:
                         option_value = next(all_cmd_options_iter)
                 else:
                     option_name = option[1]
@@ -829,6 +844,9 @@ class ProgramData:
                 flag_overrides[ProgramFlag[flag_name]] = set_to
             elif option_name in ["h", "help"]:
                 cls._print_help()
+                exit(0)
+            elif option_name == "help-all":
+                cls._print_help(show_all=True)
                 exit(0)
             elif option_name == "version":
                 cls._print_version()
@@ -3879,6 +3897,17 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None):
     nodes = []
     edges = []
 
+    transition_similar_count = Counter()
+    for state in dfa.states:
+        for transition in state.all_transitions():
+            transition_similar_count[(frozenset(transition.on_values), transition.target)] += 1
+
+    ignored_transitions = []
+    if ProgramData.do(ProgramFlag.DEBUG_DFA_HIDE_ERROR_HANDLING):
+        for i, count in transition_similar_count.items():
+            if count >= ProgramData.option(ProgramOption.DEBUG_DFA_HIDE_THRESHOLD):
+                ignored_transitions.append(i)
+
     for j, state in enumerate(dfa.states):
         shape = "circle"
         if state in dfa.accepting_states:
@@ -3894,6 +3923,8 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None):
             label = ",".join(repr(x) for x in transition.on_values)
             label = graphviz.escape(label)
             is_real = True
+            if (frozenset(transition.on_values), transition.target) in ignored_transitions:
+                continue
 
             for action in transition.actions:
                 acname = ProgramData.lookup(action, DebugTag.NAME, recurse_upwards=False)
@@ -3905,6 +3936,16 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None):
                     is_real = False
             if is_real:
                 g.edge(str(id(state)), str(id(transition.target)), label=label, style="dashed" if transition.is_fallthrough else "solid")
+
+    for v in ignored_transitions:
+        values, target = v
+        if not target or not values:
+            continue
+        # make a node
+        g.node(str(id(v)), shape="rectangle", label=f"{transition_similar_count[v]} others", color="blue", fontsize="10")
+        label = ",".join(repr(x) for x in values)
+        label = graphviz.escape(label)
+        g.edge(str(id(v)), str(id(target)), label=label)
 
     g.render(out_name, format="pdf", cleanup=True)
 
