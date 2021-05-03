@@ -92,7 +92,7 @@ def test_fail(filename):
     with pytest.raises(nmfu.NMFUError) as e:
         common_run_int_test(pt)
 
-    str(e)  # ensure error string generation is tested
+    str(e.value)  # ensure error string generation is tested
 
 def test_help_doesnt_crash():
     nmfu.ProgramData._print_help()
