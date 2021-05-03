@@ -779,12 +779,23 @@ class ProgramData:
             else:
                 print(f"{opt_str: <{pad_length}} enabled at level {cls._is_optimization_flag(flag)}")
 
+    @classmethod
+    def _reset_flags(cls):
+        cls._flags = {
+                x: x.default for x in ProgramFlag
+        }
+        cls._options = {
+                x: x.default for x in ProgramOption
+        }
+        cls._dump = []
 
     @classmethod
     def load_commandline_flags(cls, all_cmd_options: List[str]):
         """
         Load the command line flags passed in. Returns a tuple of (input_filename, program_output_name)
         """
+
+        cls._reset_flags()
 
         input_filename = None
         program_output_name = None
