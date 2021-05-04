@@ -2541,6 +2541,7 @@ class CaseNode(Node):
                     # ... and reattach them to the new else state machine
                     trans.to(sub_dfas[original_backreference[None]].starting_state).attach(*else_actions)
                     ProgramData.imbue(trans, DebugTag.NAME, "else action on case node")
+                    ProgramData.imbue(trans, DebugTag.PARENT, self)
                 # We have to add that DFA's state to the overall dfa's states array, since it won't get picked up by mergable_ds _UNLESS_ original_backreference contains more than frozenset({None})
                 if len(original_backreference[None]) == 1:
                     for state in sub_dfas[original_backreference[None]].states:
@@ -2556,6 +2557,7 @@ class CaseNode(Node):
                     trans.to(new_state).attach(*else_actions, prepend=True).fallthrough()  # this is an error handler, make sure it's a fallthrough
                     # give the transition better debug info
                     ProgramData.imbue(trans, DebugTag.NAME, "else action on case node")
+                    ProgramData.imbue(trans, DebugTag.PARENT, self)
 
         # Go through and link up all the states
         for i in mergeable_ds:
@@ -3130,7 +3132,10 @@ class ParseCtx:
             return self._parse_assign_stmt(stmt, stmt.data == "append_stmt")
         elif stmt.data == "case_stmt":
             # Find all of the matches
-            return CaseNode({k: v for k, v in (self._parse_case_clause(x) for x in stmt.children)})
+            return ProgramData.imbue(ProgramData.imbue(CaseNode({k: v for k, v in (self._parse_case_clause(x) for x in stmt.children)}), 
+                DebugTag.SOURCE_LINE, stmt.line),
+                DebugTag.SOURCE_COLUMN, stmt.column
+            )
         elif stmt.data == "optional_stmt":
             return OptionalNode(self._parse_stmt_seq(stmt.children))
         elif stmt.data == "loop_stmt":
