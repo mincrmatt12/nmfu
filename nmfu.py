@@ -3915,10 +3915,56 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
     nodes = []
     edges = []
 
+    def build_label_onvalues(on_values):
+        on_values_remaining = list(on_values)
+        on_values_remaining.sort(key=lambda x: x if isinstance(x, str) else '')
+
+        used = []
+        start_idx = sum(int(not isinstance(x, str)) for x in on_values_remaining)
+
+        range_start = start_idx
+        range_end = start_idx
+
+        label = ""
+
+        for i in range(start_idx + 1, len(on_values_remaining)):
+            if ord(on_values_remaining[i-1]) + 1 == ord(on_values_remaining[i]):
+                range_end = i
+            else:
+                if range_end - range_start >= ProgramData.option(ProgramOption.COLLAPSED_RANGE_LENGTH):
+                    # this is a valid range
+                    for j in range(range_start, range_end+1):
+                        used.append(on_values_remaining[j])
+                    
+                    label += f"{on_values_remaining[range_start]!r}-{on_values_remaining[range_end]!r},"
+                range_start = i
+                range_end = i
+
+        if range_end - range_start >= ProgramData.option(ProgramOption.COLLAPSED_RANGE_LENGTH):
+            # this is a valid range
+            for j in range(range_start, range_end+1):
+                used.append(on_values_remaining[j])
+            label += f"{on_values_remaining[range_start]!r}-{on_values_remaining[range_end]!r},"
+
+        for x in used:
+            on_values_remaining.remove(x)
+
+        if on_values_remaining:
+            label += ",".join(repr(x) for x in on_values_remaining)
+        elif label:
+            label = label[:-1]
+        label = graphviz.escape(label)
+        return label
+
     transition_similar_count = Counter()
+    replaced_actions = {}
     for state in dfa.states:
         for transition in state.all_transitions():
             transition_similar_count[(frozenset(transition.on_values), transition.target)] += 1
+            for action in transition.actions:
+                if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.MAY_GOTO_TARGET]:
+                    replaced_actions[id(action)] = action
+                    transition_similar_count[(frozenset([id(action)]), action.get_target_override_target())] += 1
 
     ignored_transitions = []
     if ProgramData.do(ProgramFlag.DEBUG_DFA_HIDE_ERROR_HANDLING):
@@ -3934,12 +3980,19 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
             shape = "square"
         if state == highlight:
             shape = "triangle"
-        g.node(str(id(state)), shape=shape, label=str(j))
+
+        parent_thing = ProgramData.lookup(state, DebugTag.PARENT)
+        while parent_thing and not isinstance(parent_thing, (Node, Match)):
+            parent_thing = ProgramData.lookup(parent_thing, DebugTag.PARENT)
+        parent_id = (id(parent_thing) * 11400714819323198485) & ((1 << 64)-1)
+        parent_id >>= (64-24)
+        parent_id |= 0x808080
+        parent_color = "#" + format(parent_id, "06x")
+        g.node(str(id(state)), shape=shape, label=str(j), style="filled", fillcolor=parent_color)
         for transition in state.all_transitions():
             if not transition.target or not transition.on_values:
                 continue
-            label = ",".join(repr(x) for x in transition.on_values)
-            label = graphviz.escape(label)
+            label = build_label_onvalues(transition.on_values)
             is_real = True
             if (frozenset(transition.on_values), transition.target) in ignored_transitions:
                 continue
@@ -3949,7 +4002,8 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
                 if acname:
                     label += "\n{}".format(acname)
                 if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.MAY_GOTO_TARGET]:
-                    g.edge(str(id(state)), str(id(action.get_target_override_target())), label=f"{acname} side effect")
+                    if (frozenset([id(action)]), action.get_target_override_target()) not in ignored_transitions:
+                        g.edge(str(id(state)), str(id(action.get_target_override_target())), label=f"{acname} side effect")
                 if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER]:
                     is_real = False
             if is_real:
@@ -3961,8 +4015,11 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
             continue
         # make a node
         g.node(str(id(v)), shape="rectangle", label=f"{transition_similar_count[v]} others", color="blue", fontsize="10")
-        label = ",".join(repr(x) for x in values)
-        label = graphviz.escape(label)
+        if type(next(iter(values))) is int:
+            acid = next(iter(values))
+            label = f"{ProgramData.lookup(replaced_actions[acid], DebugTag.NAME, recurse_upwards=False)} side effect"
+        else:
+            label = build_label_onvalues(values)
         g.edge(str(id(v)), str(id(target)), label=label)
 
     g.render(out_name, format="pdf", cleanup=True)
