@@ -963,6 +963,18 @@ class NMFUError(Exception):
     def __init__(self, reasons):
         self.reasons = reasons
 
+    @classmethod
+    def _generate_whitespace_marker(cls, line, column):
+        marker = ""
+        for i in range(column):
+            if i == column - 1:
+                marker += "^"
+            elif ProgramData.get_source_line(line)[i] == "\t":
+                marker += "\t"
+            else:
+                marker += " "
+        return marker
+
     def _get_message(self, show_potential_reasons=True, reasons_header="Potential reasons include:"):
         info_strs = []
         for reason in self.reasons:
@@ -973,14 +985,14 @@ class NMFUError(Exception):
                 if line is not None:
                     info_str += f"\n  at line {line}:\n{ProgramData.get_source_line(line)}"
                     if column is not None:
-                        info_str += "\n" + " " * (column - 1) + "^"
+                        info_str += "\n" + NMFUError._generate_whitespace_marker(line, column)
                 else:
                     info_str = info_str[-1]
             else:
                 if line is not None:
                     info_str += f"- line {line}:\n{ProgramData.get_source_line(line)}"
                     if column is not None:
-                        info_str += "\n" + " " * (column - 1) + "^"
+                        info_str += "\n" + NMFUError._generate_whitespace_marker(line, column)
                 else:
                     continue
             info_strs.append(info_str)
