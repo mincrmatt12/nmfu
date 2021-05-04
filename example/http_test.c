@@ -6,6 +6,8 @@
 
 int main(int argc, char ** argv) {
 	http_state_t state;
+again:
+	memset(&state, 0, sizeof(state));
 	http_start(&state);
 	http_result_t code;
 
@@ -17,6 +19,7 @@ int main(int argc, char ** argv) {
 		if ((nread = getline((char **)&line, &len, stdin)) == -1) {
 			break;
 		}
+#ifndef NO_UI
 		printf("input %s", line);
 		if (line[nread-1] == '\n') {
 			nread -= 1;
@@ -32,16 +35,28 @@ int main(int argc, char ** argv) {
 			if (code != HTTP_OK) break;
 		}
 		else {
+#endif
+#ifndef NO_UI
 			printf("return code %d, ", code = http_feed(line, line + nread, &state));
 			printf("state %d\n", state.state);
+#else
+			code = http_feed(line, line + nread, &state);
+#endif
 			if (code != HTTP_OK) break;
+#ifndef NO_UI
 		}
+#endif
 	}
 
 	free(line);
+#ifndef NO_UI
 	puts("final");
 	printf("state %d\n", state.state);
+#endif
 	printf("method %d; has_gzip %d; has_etag %d; url %s; etag %s; content_size %d; result %d\n", state.c.method, state.c.accept_gzip, state.c.has_etag, state.c.url, state.c.etag, state.c.content_size, state.c.result);
+#ifdef NO_UI
+	goto again;
+#endif
 
 	printf("and it only uses %lu bytes!\n", sizeof(state));
 	puts("response:");

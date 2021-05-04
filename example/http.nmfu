@@ -97,7 +97,7 @@ parser { // declare the actual parser
                         case {
                             /\ *gzip/ -> {accept_gzip = true;}
                             "\r\n" -> {break;}
-                            else -> {wait ",";}
+                            else -> {/./;}
                         }
                     }
                 }
