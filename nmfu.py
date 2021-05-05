@@ -4355,6 +4355,18 @@ def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=Non
 
             coming_from = next_coming_from
 
+        elif isinstance(ast, ForeachNode):
+            next_coming_from = debug_dump_ast(ast.child_node, into=c, coming_from=coming_from, make_id=make_id, make_subgraph=make_subgraph)
+
+            handler_start = make_id()
+            if ast.each_actions:
+                c.node(make_id(), f"each: " + ",".join(label_of(x) for x in ast.each_actions), style="filled", color="white")
+
+            if ast.after_actions:
+                c.node(make_id(), f"finish: " + ",".join(label_of(x) for x in ast.after_actions), style="filled", color="white")
+
+            coming_from = next_coming_from
+
         else:
             node = make_id()
             c.node(node, "?", color="blue")
