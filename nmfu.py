@@ -825,6 +825,7 @@ class ProgramData:
                         raise RuntimeError("Program filename specified multiple times")
                     input_filename = option
                     program_output_name = os.path.splitext(os.path.basename(input_filename))[0]
+                    program_output_name = "".join(x if x in string.ascii_letters or x == ' ' else '_' for x in program_output_name)
                     continue
                 elif option[1] == "-":
                     option_name = option[2:]
