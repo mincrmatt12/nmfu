@@ -13,12 +13,12 @@ out int content_size = 0;
 // "subroutine"-esque functionality. duplicate states are optimized out.
 //
 // Effectively just substitudes into the ast at the appropriate point.
-macro waitend {
+macro waitend() {
     wait "\r\n\r\n";
 }
 
 // optional space as in the spec
-macro ows {
+macro ows() {
     optional {" ";}
 }
 

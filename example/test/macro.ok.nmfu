@@ -1,0 +1,44 @@
+out int int1;
+out int int2;
+
+hook hi;
+
+macro test1(out out2, match words) {
+    out2 = 0;
+    foreach {
+        words;
+    } do {
+        out2 = [out2 * 10 + ($last - '0')];
+    }
+}
+
+macro dummy() {
+    "hi";
+}
+
+macro test2(hook hooky, macro submacro) {
+    submacro();
+    "ooflio";
+    hooky();
+}
+
+macro foreach_wrapper(expr action, loop target) {
+    foreach {
+        /\w+/;
+        " ";
+    } do {
+        int1 = action;
+    }
+    break target;
+}
+
+parser {
+    test1(int2, /\d+/);
+    test2(hi, dummy);
+
+    loop outer {
+    loop inner {
+        foreach_wrapper([int1 + 5], outer);
+    }
+    }
+}

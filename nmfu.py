@@ -69,7 +69,17 @@ out_type: "bool" -> bool_type
 
 hook_decl: "hook" IDENTIFIER ";"
 
-macro_decl: "macro" IDENTIFIER "{" statement* "}"
+macro_decl: "macro" IDENTIFIER macro_args "{" statement* "}"
+
+macro_args: "(" macro_arg ("," macro_arg)* ")"
+          | "(" ")" -> macro_arg_empty
+
+macro_arg: "macro" IDENTIFIER -> macro_macro_arg
+         | "out"   IDENTIFIER -> macro_out_arg
+         | "match" IDENTIFIER -> macro_match_expr_arg
+         | "expr"  IDENTIFIER -> macro_int_expr_arg
+         | "hook"  IDENTIFIER -> macro_hook_arg
+         | "loop"  IDENTIFIER -> macro_breaktgt_arg
 
 parser_decl: "parser" "{" statement+ "}"
 
@@ -1006,8 +1016,8 @@ class NMFUError(Exception):
         return self._get_message()
 
 class IllegalASTStateError(NMFUError):
-    def __init__(self, msg, source):
-        super().__init__([source])
+    def __init__(self, msg, *source):
+        super().__init__([*source])
         self.source = source
         self.msg = msg
 
@@ -2825,13 +2835,51 @@ class ForeachNode(ActionSinkNode, ActionSourceNode):
             sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH], chain_actions=self.after_actions)
 
         return sub_dfa
+
+class MacroArgumentKind(enum.Enum):
+    MACRO = 0
+    OUT = 1
+    MATCH = 2
+    INTEXPR = 3
+    HOOK = 4
+    LOOP = 5
+
+    EXPR = 10
+
+class MacroArgument:
+    def __init__(self, name: str, kind: MacroArgumentKind):
+        self.name = name
+        self.kind = kind
+
+    def get_lookup_type(self):
+        if self.kind in (MacroArgumentKind.MATCH, MacroArgumentKind.INTEXPR):
+            return MacroArgumentKind.EXPR
+        else:
+            return self.kind
     
 class Macro:
-    def __init__(self, name_token: lark.Token, parse_tree: lark.Tree):
+    def __init__(self, name_token: lark.Token, parse_tree: lark.Tree, arguments: List[MacroArgument]):
         self.name = name_token.value
         self.parse_tree = parse_tree
+        self.arguments = arguments
         ProgramData.imbue(self, DebugTag.SOURCE_LINE, name_token.line)
         ProgramData.imbue(self, DebugTag.NAME, "macro " + self.name)
+
+    def bind_arguments_for(self, input_trees: List[lark.Tree]):
+        bound_arguments = {}
+        for argspec, value in zip(self.arguments, input_trees):
+            allowed_types = {
+                MacroArgumentKind.MACRO: ("identifier_const",),
+                MacroArgumentKind.OUT: ("identifier_const",),
+                MacroArgumentKind.HOOK: ("identifier_const",),
+                MacroArgumentKind.LOOP: ("identifier_const",),
+                MacroArgumentKind.MATCH: ("regex", "end_expr", "concat_expr", "string_const", "string_case_const"),
+                MacroArgumentKind.INTEXPR: ("string_const", "sum_expr", "bool_const", "number_const", "char_const", "identifier_const")
+            }[argspec.kind]
+            if value.data not in allowed_types:
+                raise IllegalParseTree("Invalid argument type for argument " + argspec.name, value)
+            bound_arguments[(argspec.get_lookup_type(), argspec.name)] = value
+        return bound_arguments
 
 # =========
 # PARSE CTX
@@ -2850,6 +2898,8 @@ class ParseCtx:
         self.exception_handlers = defaultdict(lambda: self.generic_fail_state)  # normal ErrorReason -> State
         self.break_handlers = {}      # "string name" -> Action
         self.innermost_break_handler = None  # just an Action
+        
+        self.bound_argument_stack: List[Dict[Tuple[MacroArgumentKind, str], lark.Tree]] = []
     
     def parse(self):
         # Parse state_object_spec
@@ -2860,7 +2910,7 @@ class ParseCtx:
             self.state_object_spec[out_obj.name] = out_obj
         # Parse macros
         for macro in self._parse_tree.find_data("macro_decl"):
-            macro_obj = Macro(macro.children[0], macro.children[1:])
+            macro_obj = Macro(macro.children[0], macro.children[2:], self._parse_macro_arguments(macro.children[1]))
             if macro_obj.name in self.macros:
                 raise DuplicateDefinitionError("macro", macro_obj, macro_obj.name)
             self.macros[macro_obj.name] = macro_obj
@@ -2875,6 +2925,32 @@ class ParseCtx:
 
         if isinstance(self.ast, ActionSourceNode):
             self.start_actions, self.ast = self.ast.adopt_actions_from()
+
+    def _lookup_bound_argument(self, name, context: MacroArgumentKind):
+        try:
+            return self.bound_argument_stack[-1][(context, name.value)]
+        except (KeyError, IndexError):
+            raise UndefinedReferenceError("bound argument", name)
+
+    def _parse_macro_arguments(self, args: lark.Tree):
+        if args.data == "macro_arg_empty":
+            return []
+        defined = set()
+        parsed_args = []
+        for i in args.children:
+            name = i.children[0].value
+            if name in defined:
+                raise DuplicateDefinitionError("macro argument", i, name)
+            kind = {
+                "macro_macro_arg": MacroArgumentKind.MACRO,
+                "macro_out_arg": MacroArgumentKind.OUT,
+                "macro_match_expr_arg": MacroArgumentKind.MATCH,
+                "macro_int_expr_arg": MacroArgumentKind.INTEXPR,
+                "macro_hook_arg": MacroArgumentKind.HOOK,
+                "macro_breaktgt_arg": MacroArgumentKind.LOOP,
+            }[i.data]
+            parsed_args.append(MacroArgument(name, kind))
+        return parsed_args
 
     def _convert_string(self, escaped_string: str):
         """
@@ -2944,7 +3020,17 @@ class ParseCtx:
             return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(ord(expr.children[0].value[1])), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
         elif expr.data == "math_var":
             try:
-                return ProgramData.imbue(ProgramData.imbue(OutIntegerExpr(self.state_object_spec[expr.children[0].value]), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
+                out_spec = self.state_object_spec[expr.children[0].value]
+            except KeyError:
+                try:
+                    target_name = self._lookup_bound_argument(expr.children[0], MacroArgumentKind.OUT).children[0]
+                    out_spec = self.state_object_spec[target_name.value]
+                except UndefinedReferenceError:
+                    raise UndefinedReferenceError("output", expr.children[0])
+                except KeyError:
+                    raise UndefinedReferenceError("output", target_name)
+            try:
+                return ProgramData.imbue(ProgramData.imbue(OutIntegerExpr(out_spec), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
             except KeyError:
                 raise UndefinedReferenceError("output", expr.children[0])
         elif expr.data == "builtin_math_var":
@@ -2980,6 +3066,11 @@ class ParseCtx:
             ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
             return val
         elif expr.data == "identifier_const":
+            try:
+                expr = self._lookup_bound_argument(expr.children[0], MacroArgumentKind.EXPR)
+                return self._parse_integer_expr(expr, into_storage=into_storage)
+            except UndefinedReferenceError:
+                pass
             if into_storage is None:
                 raise IllegalParseTree("Undefined enumeration value, no into_storage", expr)
 
@@ -3041,6 +3132,8 @@ class ParseCtx:
             return match
         elif expr.data == "concat_expr":
             return ConcatMatch(list(self._parse_match_expr(x) for x in expr.children))
+        elif expr.data == "identifier_const":
+            return self._parse_match_expr(self._lookup_bound_argument(expr.children[0], MacroArgumentKind.EXPR))
         else:
             raise IllegalParseTree("Invalid expression in match expression context", expr)
 
@@ -3052,23 +3145,35 @@ class ParseCtx:
         # Resolve the target
         targeted = stmt.children[0].value
         if targeted not in self.state_object_spec:
-            raise UndefinedReferenceError("output", stmt.children[0])
+            try:
+                targeted = self._lookup_bound_argument(stmt.children[0], MacroArgumentKind.OUT).children[0].value
+            except UndefinedReferenceError:
+                raise UndefinedReferenceError("output", stmt.children[0])
         targeted = self.state_object_spec[targeted]
 
         if targeted.type == OutputStorageType.STR and is_append:
+            # Handle arguments
+            if stmt.children[1].data == "identifier_const":
+                sub_expr = self._lookup_bound_argument(stmt.children[1].children[0], MacroArgumentKind.EXPR)
+            else:
+                sub_expr = stmt.children[1]
             # Check if this is a math expression (only valid append type other than match)
-            if stmt.children[1].data in ["math_num", "math_var", "builtin_math_var", "sum_expr", "mul_expr"]:
+            if sub_expr.data in ["math_num", "math_var", "builtin_math_var", "sum_expr", "mul_expr"]:
                 # Create an AppendCharTo action
-                return ActionNode(AppendCharTo(self.exception_handlers[ErrorReasons.OUT_OF_SPACE], self._parse_math_expr(stmt.children[1]), targeted))
+                return ActionNode(AppendCharTo(self.exception_handlers[ErrorReasons.OUT_OF_SPACE], self._parse_math_expr(sub_expr), targeted))
             # Create an append expression
-            match_node = MatchNode(self._parse_match_expr(stmt.children[1]))
+            match_node = MatchNode(self._parse_match_expr(sub_expr))
             match_node.match.attach(AppendTo(self.exception_handlers[ErrorReasons.OUT_OF_SPACE], targeted))
             return match_node
         elif targeted.type == OutputStorageType.STR:
-            if stmt.children[1].data != "string_const":
-                raise IllegalParseTree("String assignment only supports string constants, did you mean +=?", stmt.children[1])
+            # Handle arguments
+            if stmt.children[1].data == "identifier_const":
+                sub_expr = self._lookup_bound_argument(stmt.children[1].children[0], MacroArgumentKind.EXPR)
             else:
-                return ActionNode(SetToStr(self._convert_string(stmt.children[1].children[0].value), targeted))
+                sub_expr = stmt.children[1]
+            if sub_expr.data != "string_const":
+                raise IllegalParseTree("String assignment only supports string constants, did you mean +=?", sub_expr)
+            return ActionNode(SetToStr(self._convert_string(sub_expr.children[0].value), targeted))
         elif not is_append:
             return ActionNode(SetTo(self._parse_integer_expr(stmt.children[1], targeted), targeted))
 
@@ -3092,6 +3197,16 @@ class ParseCtx:
 
         return frozenset(result_set), target_dfa
 
+    def _parse_macro_call(self, lark_node_for_error: lark.Tree, name: str, arguments: List[lark.Tree]):
+        if len(arguments) != len(self.macros[name].arguments):
+            raise IllegalParseTree("Incorrect number of arguments", lark_node_for_error)
+        self.bound_argument_stack.append(
+            self.macros[name].bind_arguments_for(arguments)
+        )
+        node = ProgramData.imbue(self._parse_stmt_seq(self.macros[name].parse_tree), DebugTag.PARENT, self.macros[name])
+        del self.bound_argument_stack[-1]
+        return node
+
     def _parse_stmt(self, stmt: lark.Tree) -> Node:
         """
         Parse a statement into a node
@@ -3103,12 +3218,21 @@ class ParseCtx:
         elif stmt.data == "call_stmt":
             name = stmt.children[0].value
             try:
-                return ProgramData.imbue(self._parse_stmt_seq(self.macros[name].parse_tree), DebugTag.PARENT, self.macros[name])
+                return self._parse_macro_call(stmt, name, stmt.children[1:])
             except KeyError:
-                if name in self.hooks:
-                    return ActionNode(ProgramData.imbue(ProgramData.imbue(CallHook(name), DebugTag.SOURCE_LINE, stmt.line), DebugTag.SOURCE_COLUMN, stmt.column))
-                else:
-                    raise UndefinedReferenceError("macro", stmt.children[0])
+                try:
+                    name2 = self._lookup_bound_argument(stmt.children[0], MacroArgumentKind.MACRO).children[0].value
+                    return self._parse_macro_call(stmt, name2, stmt.children[1:])
+                except UndefinedReferenceError:
+                    if name not in self.hooks:
+                        try:
+                            name = self._lookup_bound_argument(stmt.children[0], MacroArgumentKind.HOOK).children[0].value
+                        except UndefinedReferenceError:
+                            pass
+                    if name in self.hooks:
+                        return ActionNode(ProgramData.imbue(ProgramData.imbue(CallHook(name), DebugTag.SOURCE_LINE, stmt.line), DebugTag.SOURCE_COLUMN, stmt.column))
+                    else:
+                        raise UndefinedReferenceError("macro or hook", stmt.children[0])
         elif stmt.data == "finish_stmt":
             act = FinishAction()
             ProgramData.imbue(act, DebugTag.SOURCE_LINE, stmt.line)
@@ -3118,9 +3242,13 @@ class ParseCtx:
             if stmt.children:
                 target_name = stmt.children[0].value
                 if target_name not in self.break_handlers:
-                    raise UndefinedReferenceError("loop", stmt.children[0])
-                else:
-                    act = self.break_handlers[target_name]
+                    try:
+                        target_name = self._lookup_bound_argument(stmt.children[0], MacroArgumentKind.LOOP).children[0].value
+                        if target_name not in self.break_handlers:
+                            raise KeyError()
+                    except (KeyError, UndefinedReferenceError):
+                        raise UndefinedReferenceError("loop", stmt.children[0])
+                act = self.break_handlers[target_name]
             else:
                 act = self.innermost_break_handler
             if act is None:

@@ -5,7 +5,7 @@ out str[32] date;
 
 hook on_advisory;
 
-macro ows {
+macro ows() {
     /\s*/;
 }
 
