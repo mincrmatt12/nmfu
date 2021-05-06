@@ -53,10 +53,20 @@ out enum{GET,POST} method;
 
 All strings have a defined maximum size, which includes the null-terminator.
 
-Macros in NMFU are simple parse-tree level replacements. They do not support arguments, and look like:
+Macros in NMFU are simple parse-tree level replacements. They look like:
 
 ```lark
-macro_decl: "macro" IDENTIFIER "{" statement* "}"
+macro_decl: "macro" IDENTIFIER macro_args "{" statement* "}"
+
+macro_args: "(" macro_arg ("," macro_arg)* ")"
+          | "(" ")" -> macro_arg_empty
+
+macro_arg: "macro" IDENTIFIER -> macro_macro_arg
+         | "out"   IDENTIFIER -> macro_out_arg
+         | "match" IDENTIFIER -> macro_match_expr_arg
+         | "expr"  IDENTIFIER -> macro_int_expr_arg
+         | "hook"  IDENTIFIER -> macro_hook_arg
+         | "loop"  IDENTIFIER -> macro_breaktgt_arg
 ```
 
 For example:
@@ -71,6 +81,31 @@ macro ows() { // optional white space
 
 When macros are "called", or instantiated, all NMFU does is copy the contents of the parse tree from the macro
 declaration to the call-site. Note that although macros can call other macros, they cannot recurse.
+
+Macros can also take arguments, which are similarly treated as parse-tree level replacements, with the added restriction
+that their types _are_ checked. For example:
+
+```
+macro read_number(out target, match delimit) {
+    target = 0;
+    foreach {
+        /\d+/;
+    } do {
+        target = [target * 10 + ($last - '0')];
+    }
+
+    delimit;
+}
+```
+
+There are 6 types of arguments:
+
+- `macro`: a reference to another macro
+- `hook`: a reference to a hook
+- `out`: a reference to an _output-variable_
+- `match`: an arbitrary _match-expression_
+- `expr`: an arbitrary _integer-expression_
+- `loop`: an arbitrary named _loop-statement_, for use in _break-statements_.
 
 Hooks (which are callbacks to user code which the parser can call at certain points) are defined with a _hook-declaration_:
 
@@ -114,10 +149,10 @@ The next two statements are the _assign-statement_ and _append_statement_. The _
 and assigns its result into the named _output-variable_. The _append-statement_ instead appends whatever is matched by the _match-expression_ into the named _output-variable_ which must by a string type. Additionally,
 if the argument to an _append-statement_ is a _math-expression_, then the result of evaluating the expression will be treated as a character code and appended to the string.
 
-The _call-stmt_ instantiates a macro or calls a hook. Note that there is currently no valid way to pass parameters to either, and as such the expressions provided
-will be ignored, although may in future be used as C-style macro arguments or passed to the underlying hook function.
+The _call-stmt_ instantiates a macro or calls a hook. Note that there is currently no valid way to pass parameters to a hook, and as such the expressions provided
+in that case will be ignored. Macro arguments are always parsed as generic expressions and then interpreted according to the type given to them at declaration.
 
-If a hook and macro have the same name, the macro will take priority.
+If a hook and macro have the same name, the macro will take priority. Priority is undefined if a macro argument and global hook or macro share a name.
 
 The _break-statement_ is explained along with loops in a later section.
 
@@ -153,6 +188,8 @@ The _end-match-expression_ is a match expression which only matches the end of i
 The _concat-expression_ matches any number of _match-expressions_ in order.
 
 The _regex-expression_ matches a subset of regexes. The quirks of the regex dialect NMFU uses can be found in a later section.
+
+Additionally, the name of a macro argument of type `match` can replace any _match-expression_, including the sub-expressions inside _concat-expressions_.
 
 An _integer-expression_ is anything that can be directly assigned to an output variable, **including strings**:
 
@@ -195,6 +232,8 @@ For example:
 ```
 content_length = [content_length * 10 + ($last - '0')];
 ```
+
+Additionally, the name of a macro argument of type `expr` can replace any _integer-expression_. Priority versus _output-variable_ names is undefined.
 
 ### Block Statements
 
@@ -440,4 +479,4 @@ There is a vim plugin available which adds syntax highlighting for `.nmfu` files
 ## License
 
 NMFU is licensed under the GPLv3.
-Copyright (C) 2020 Matthew Mirvish.
+Copyright (C) 2020-2021 Matthew Mirvish.
