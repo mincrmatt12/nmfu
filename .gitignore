@@ -1,6 +1,7 @@
 .vim/*
 *.pyc
 *.pdf
+*.dot
 *.png
 *.egg-info
 

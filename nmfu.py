@@ -626,6 +626,7 @@ class ProgramOption(enum.Enum):
 
     # Debug options
     DEBUG_DFA_HIDE_THRESHOLD = (15, "")
+    DEBUG_GRAPH_DUMP_FORMAT = ("pdf", "Output format for graphviz dumpers, use 'dot' to get raw dot file")
 
 class HasDefaultDebugInfo:
     def debug_lookup(self, tag: DebugTag):
@@ -4168,7 +4169,10 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
             label = build_label_onvalues(values)
         g.edge(str(id(v)), str(id(target)), label=label)
 
-    g.render(out_name, format="pdf", cleanup=True)
+    if ProgramData.option(ProgramOption.DEBUG_GRAPH_DUMP_FORMAT) == "dot":
+        g.save(out_name + ".dot")
+    else:
+        g.render(out_name, format=ProgramData.option(ProgramOption.DEBUG_GRAPH_DUMP_FORMAT), cleanup=True)
 
 def debug_dump_regexnfa(nfa: RegexNFA, out_name="nfa"): # pragma: no cover
     if not debug_enabled:
@@ -4194,7 +4198,10 @@ def debug_dump_regexnfa(nfa: RegexNFA, out_name="nfa"): # pragma: no cover
             label = "e"
             g.edge(str(id(state)), str(id(target)), label=label)
 
-    g.render(out_name, format="pdf", cleanup=True)
+    if ProgramData.option(ProgramOption.DEBUG_GRAPH_DUMP_FORMAT) == "dot":
+        g.save(out_name + ".dot")
+    else:
+        g.render(out_name, format=ProgramData.option(ProgramOption.DEBUG_GRAPH_DUMP_FORMAT), cleanup=True)
 
 def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=None, make_subgraph=None): # pragma: no cover
     if into is None:
@@ -4217,7 +4224,10 @@ def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=Non
         
         debug_dump_ast(ast, into=g, coming_from=["c_0"], make_id=_make_id, make_subgraph=_make_sid)
 
-        g.render(out_name, format="pdf", cleanup=True)
+        if ProgramData.option(ProgramOption.DEBUG_GRAPH_DUMP_FORMAT) == "dot":
+            g.save(out_name + ".dot")
+        else:
+            g.render(out_name, format=ProgramData.option(ProgramOption.DEBUG_GRAPH_DUMP_FORMAT), cleanup=True)
         return
 
     def label_of(x):
