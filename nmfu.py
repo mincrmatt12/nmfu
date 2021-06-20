@@ -3869,6 +3869,13 @@ class CodegenCtx:
 
         return result
 
+    def _transition_will_directly_jump(self, transition: DFTransition):
+        if transition.is_fallthrough:
+            return False
+        if transition.target in self.dfa.accepting_states and not ProgramData.do(ProgramFlag.STRICT_DONE_TOKEN_GENERATION):
+            return False
+        return all(x.get_target_override_mode() == ActionOverrideMode.NONE for x in transition.actions)
+
     def _generate_transition_body(self, transition: DFTransition, from_end=False):
         transition_body = Outputter()
         # Set the next state
@@ -3898,7 +3905,7 @@ class CodegenCtx:
                 else:
                     transition_body.add(f"if (++start == end) return {self.program_name.upper()}_OK;");
                     transition_body.add("inval = *start;")
-                if all(x.get_target_override_mode() == ActionOverrideMode.NONE for x in transition.actions):
+                if self._transition_will_directly_jump(transition):
                     transition_body.add(f"goto jpto_{self.dfa.states.index(transition.target)};");
                 else:
                     # use the repeatswitch case
@@ -3965,7 +3972,10 @@ class CodegenCtx:
                 # Emit goto target for fallthroughs if anything falls here (these are separate to make it slightly easier to read)
                 if any(x.is_fallthrough for x in self.dfa.transitions_pointing_to(state)):
                     contents.add(f"fall_{idx}:")
-                contents.add(f"jpto_{idx}:")
+                # If any transition can directly jump into this case, emit a label for it to do so. We don't really _need_ these checks
+                # but gcc complains about unused labels in -Wall.
+                if any(self._transition_will_directly_jump(x) for x in self.dfa.transitions_pointing_to(state) if x.on_values != {DFTransition.End}):
+                    contents.add(f"jpto_{idx}:")
                 with contents as state_body:
                     # Is this a normal state
                     if state is not self.generic_fail_state:
