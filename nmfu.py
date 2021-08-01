@@ -654,6 +654,7 @@ class DebugDumpable(enum.Enum):
     AST = "ast"
     DFA = "dfa"
     TRACEBACK = "traceback"
+    PARSE = "parse"
 
 class ProgramData:
     _collection = defaultdict(dict)
@@ -687,7 +688,7 @@ class ProgramData:
         cls._current_source = src.splitlines(keepends=False)
 
     @classmethod
-    def imbue(cls, obj: object, tag: DebugTag, value: object):
+    def imbue(cls, obj: object, tag: DebugTag, value: object, *extra_tags):
         """
         Imbue this object with this debug information
         """
@@ -695,6 +696,8 @@ class ProgramData:
         if tag == DebugTag.PARENT:
             ProgramData._children[id(value.__repr__.__self__)].append(obj)
         ProgramData._collection[id(obj)][tag] = value
+        if extra_tags:
+            return cls.imbue(obj, *extra_tags)
         return obj
 
     @classmethod
@@ -4561,6 +4564,8 @@ def main(): # pragma: no cover
     except lark.LarkError as e:
         print("Syntax error:", str(e), file=sys.stderr)
         exit(3)
+
+    if ProgramData.dump(DebugDumpable.PARSE): lark.tree.pydot__tree_to_png(parse_tree, ProgramData.dump_prefix + ".parse.png")
 
     pctx = ParseCtx(parse_tree)
 
