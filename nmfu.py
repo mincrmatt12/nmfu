@@ -303,6 +303,12 @@ class DFConditionalTransition(DFTransition):
         # TODO: work properly
         self.condition = conditions[0]
 
+    def __repr__(self):
+        if self.actions:
+            return f"<DFConditionalTransition on={self.condition!r} to={self.target} actions={self.actions}>"
+        else:
+            return f"<DFConditionalTransition on={self.condition!r} to={self.target}>"
+
 class DFState:
     all_states = {}
 
@@ -635,12 +641,17 @@ class DFA:
         if isinstance(chained_dfa.starting_state, DFConditionPoint):
             # Add an extra state that will represent the condition point properly (see docs for equivalent_on_values)
             valid, to_else = chained_dfa.starting_state.equivalent_on_values(treat_as_else)
-            print(valid, to_else)
             fake_start = DFState()
-            fake_start[valid] = chained_dfa.starting_state
-            fake_start[to_else] = treat_as_else[0]
-            fake_start[valid].fallthrough(True)
-            fake_start[to_else].fallthrough(True)
+            chained_dfa.add(fake_start)
+            # If there were any actual states, tie them
+            if valid and to_else:
+                fake_start[valid] = chained_dfa.starting_state
+                fake_start[to_else] = treat_as_else[0]
+                fake_start[valid].fallthrough(True)
+                fake_start[to_else].fallthrough(True)
+            else:
+                # Otherwise, just add a generic catch-all else
+                fake_start[DFTransition.Else] = chained_dfa.starting_state
             chained_dfa.starting_state = fake_start
 
         # First, add transitions between each of the sub_states corresponding to the transitions of the original starting node
@@ -1589,6 +1600,7 @@ class IntegerExprUseContext(enum.Enum):
     ASSIGN_INITIAL = 1
     ASSIGN_ON_END = 2
     CONDITION_PREDICATE = 3
+    CONDITION_PREDICATE_END = 4
 
 class IntegerExpr(abc.ABC):
     @abc.abstractmethod
@@ -1618,9 +1630,10 @@ class IntegerExpr(abc.ABC):
         return []
 
 class LiteralIntegerExpr(IntegerExpr):
-    def __init__(self, value, typ: OutputStorageType = OutputStorageType.INT):
+    def __init__(self, value, typ: OutputStorageType = OutputStorageType.INT, model_ref: OutputStorage=None):
         self.value = value
         self.typ = typ
+        self.model_ref = model_ref
 
     def result_type(self):
         return self.typ
@@ -1671,7 +1684,7 @@ class LastCharIntegerExpr(IntegerExpr):
         return OutputStorageType.INT
 
     def get_invalid_contexts(self):
-        return [IntegerExprUseContext.ASSIGN_INITIAL, IntegerExprUseContext.ASSIGN_ON_END]
+        return [IntegerExprUseContext.ASSIGN_INITIAL, IntegerExprUseContext.ASSIGN_ON_END, IntegerExprUseContext.CONDITION_PREDICATE_END]
 
     def __eq__(self, other):
         return isinstance(other, LastCharIntegerExpr)
@@ -3359,7 +3372,7 @@ class ParseCtx:
         elif type_obj.data == "str_type":
             return OutputStorage(OutputStorageType.STR, name, default_value=default_value, str_size=int(type_obj.children[0].value))
 
-    def _parse_math_expr(self, expr: lark.Tree):
+    def _parse_math_expr(self, expr: lark.Tree, into_storage: OutputStorage=None):
         """
         Parse a math expr [(something)]
         """
@@ -3369,6 +3382,12 @@ class ParseCtx:
         elif expr.data == "math_char_const":
             return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(ord(expr.children[0].value[1])), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
         elif expr.data == "math_var":
+            # Try to handle enums too
+            if into_storage is not None and into_storage.type == OutputStorageType.ENUM and expr.children[0].value in into_storage.enum_values:
+                val = LiteralIntegerExpr(expr.children[0].value, OutputStorageType.ENUM, model_ref=into_storage)
+                ProgramData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
+                ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
+                return val
             try:
                 out_spec = self.state_object_spec[expr.children[0].value]
             except KeyError:
@@ -3394,7 +3413,12 @@ class ParseCtx:
         elif expr.data == "mul_expr":
             return MulIntegerExpr([self._parse_integer_expr(x) for x in expr.children[::2]], [MulIntegerExprOp.MUL, *(MulIntegerExprOp(x.value) for x in expr.children[1::2])])
         elif expr.data == "comp_expr":
-            return CompareIntegerExpr(self._parse_integer_expr(expr.children[0]), self._parse_integer_expr(expr.children[2]), CompareIntegerExprOp(expr.children[1].value))
+            left = self._parse_integer_expr(expr.children[0])
+            if isinstance(left, OutIntegerExpr):
+                ref = left.ref
+            else:
+                ref = None
+            return CompareIntegerExpr(left, self._parse_integer_expr(expr.children[2], into_storage=ref), CompareIntegerExprOp(expr.children[1].value))
         elif expr.data == "conjunction_expr":
             return ConjunctionIntegerExpr([self._parse_integer_expr(x) for x in expr.children])
         elif expr.data == "disjunction_expr":
@@ -3436,7 +3460,7 @@ class ParseCtx:
             if expr.children[0].value not in into_storage.enum_values:
                 raise UndefinedReferenceError("enumeration constant", expr)
             
-            val = LiteralIntegerExpr(expr.children[0].value, OutputStorageType.ENUM)
+            val = LiteralIntegerExpr(expr.children[0].value, OutputStorageType.ENUM, model_ref=into_storage)
             ProgramData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
             ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
             return val
@@ -3453,7 +3477,7 @@ class ParseCtx:
             except KeyError as e:
                 raise UndefinedReferenceError("boolean constant", expr.children[0]) from e
         elif expr.data in all_sum_expr_nodes:
-            return self._parse_math_expr(expr)
+            return self._parse_math_expr(expr, into_storage)
         else:
             raise IllegalParseTree("Invalid expression in integer expr", expr)
 
@@ -3636,6 +3660,9 @@ class ParseCtx:
                     DebugTag.SOURCE_COLUMN, condition_tree.column
                 )
                 conditions_ordered.append(condition)
+            if not isinstance(conditions_ordered[-1], ElseCondition):
+                conditions_ordered.append(ElseCondition())
+                condition_map[conditions_ordered[-1]] = None
             return ProgramData.imbue(
                 IfElseNode(conditions_ordered, condition_map),
                 DebugTag.SOURCE_LINE, stmt.line,
@@ -4016,31 +4043,32 @@ class CodegenCtx:
         result.add(f"typedef enum {self.program_name}_out_{out_decl.name} {self.program_name}_out_{out_decl.name}_t;")
         return result.value()
 
-    def _convert_literal_value(self, literal, out_expr: OutputStorage):
-        if out_expr.type == OutputStorageType.ENUM:
-            return f"{self.program_name.upper()}_{out_expr.name.upper()}_{literal.upper()}"
-        elif out_expr.type == OutputStorageType.BOOL:
-            return "true" if literal else "false"
-        elif out_expr.type == OutputStorageType.INT:
-            return str(literal)
+    def _convert_literal_value(self, literal: LiteralIntegerExpr):
+        if literal.result_type() == OutputStorageType.ENUM:
+            return f"{self.program_name.upper()}_{literal.model_ref.name.upper()}_{literal.get_literal_result().upper()}"
+        elif literal.result_type() == OutputStorageType.BOOL:
+            return "true" if literal.get_literal_result() else "false"
+        elif literal.result_type() == OutputStorageType.INT:
+            return str(literal.get_literal_result())
         else:
-            return '"{}"'.format(self._escape_string(literal))
+            return '"{}"'.format(self._escape_string(literal.get_literal_result()))
 
-    def _generate_code_for_int_expr(self, intexpr: IntegerExpr, ctx: IntegerExprUseContext, out_expr: OutputStorage):
+    def _generate_code_for_int_expr(self, intexpr: IntegerExpr, ctx: IntegerExprUseContext, out_expr: OutputStorage=None):
         """
         Generate C expression that evaluates to the value of intexpr, used in context ctx and which will fill out_expr (or have its type)
         """
 
-        if any(x == ctx for x in intexpr.get_invalid_contexts()):
+        if ctx in intexpr.get_invalid_contexts():
             raise IllegalIntExpr("Illegal use of integer expression in context {}".format(ctx.name), intexpr)
 
-        if intexpr.result_type() != out_expr.type:
-            raise IllegalIntExpr("Mismatched types for target storage", intexpr)
+        if out_expr is not None:
+            if intexpr.result_type() != out_expr.type:
+                raise IllegalIntExpr("Mismatched types for target storage", intexpr)
 
         if isinstance(intexpr, LiteralIntegerExpr):
-            return self._convert_literal_value(intexpr.get_literal_result(), out_expr)
+            return self._convert_literal_value(intexpr)
         elif isinstance(intexpr, OutIntegerExpr):
-            return f"state->c.{out_expr.name}"
+            return f"state->c.{intexpr.ref.name}"
         elif isinstance(intexpr, LastCharIntegerExpr):
             return f"({self._integer_containing(None)})(inval)" # name of the last character value
         elif isinstance(intexpr, SumIntegerExpr):
@@ -4059,8 +4087,18 @@ class CodegenCtx:
                 result += " "
                 result += f"({self._generate_code_for_int_expr(child, ctx, out_expr)})"
             return result
+        elif isinstance(intexpr, CompareIntegerExpr):
+            return f"({self._generate_code_for_int_expr(intexpr.left, ctx, out_expr)} {intexpr.op.value} {self._generate_code_for_int_expr(intexpr.right, ctx, out_expr)})"
+        elif isinstance(intexpr, (DisjunctionIntegerExpr, ConjunctionIntegerExpr)):
+            result = f"({self._generate_code_for_int_expr(intexpr.children[0], ctx, out_expr)})"
+            for child in intexpr.children:
+                result += " "
+                result += "||" if isinstance(intexpr, DisjunctionIntegerExpr) else "&&"
+                result += " "
+                result += f"({self._generate_code_for_int_expr(child, ctx, out_expr)})"
+            return result
         else:
-            raise NotImplementedError("unsupported intexpr type")
+            raise NotImplementedError("unsupported intexpr type", intexpr)
 
     def _escape_string(self, value: str):
         result = ""
@@ -4258,6 +4296,7 @@ class CodegenCtx:
             transition_body.add(f"state->state = {self.dfa.states.index(transition.target)};")
         except ValueError:
             transition_body.add("// terminating state")
+        target_overriden = False
         # Generate actions
         for action in transition.actions:
             transition_body.add()
@@ -4265,8 +4304,11 @@ class CodegenCtx:
             transition_body += self._generate_action_implementation(action, is_end=from_end)
         # Check if we should fallthrough and generate a goto
         if transition.is_fallthrough:
-            transition_body.add(f"// fallthrough")
-            transition_body.add(f"goto fall_{self.dfa.states.index(transition.target)};")
+            if transition.target in self.dfa.states:
+                transition_body.add(f"// fallthrough")
+                transition_body.add(f"goto fall_{self.dfa.states.index(transition.target)};")
+            else:
+                transition_body.add("// fallthrough to terminate")
         # Otherwise, if this state is targeting an accept state, return DONE instead of OK
         elif transition.target in self.dfa.accepting_states and not ProgramData.do(ProgramFlag.STRICT_DONE_TOKEN_GENERATION):
             transition_body.add("// immediately return DONE")
@@ -4289,7 +4331,46 @@ class CodegenCtx:
                 pass # terminating state
         return transition_body.value()
 
+    def _generate_condition(self, condition: DFCondition, from_end=False):
+        if isinstance(condition, ConstantCondition):
+            return str(condition.get_literal_result()).lower()
+        elif isinstance(condition, IntegerCondition):
+            return self._generate_code_for_int_expr(condition.expr, IntegerExprUseContext.CONDITION_PREDICATE_END if from_end else IntegerExprUseContext.CONDITION_PREDICATE)
+
+    def _generate_condition_point_body(self, state: DFConditionPoint, from_end=False):
+        result = Outputter()
+
+        result.add("// conditions")
+
+        generated_if = False
+        for condition in state.transitions:
+            if isinstance(condition.condition, ElseCondition):
+                if not generated_if:
+                    raise IllegalDFAStateError("Else condition is not last in list", state)
+                result.add("else {")
+            else:
+                if generated_if:
+                    cond_name = "else if"
+                else:
+                    generated_if = True
+                    cond_name = "if"
+
+                result.add(f"{cond_name} ({self._generate_condition(condition.condition, from_end)}) {{")
+
+            # Generate condition body like normal
+            with result as body:
+                body += self._generate_transition_body(condition, from_end)
+
+            result.add("}")
+
+        result.add("// fallback for invalid state")
+        result.add(f"return {self.program_name.upper()}_FAIL;")
+
+        return result.value()
+
     def _generate_switch_body(self, state: DFState):
+        if isinstance(state, DFConditionPoint):
+            return self._generate_condition_point_body(state)
         result = Outputter()
 
         # Split transitions into else groups
@@ -4365,6 +4446,8 @@ class CodegenCtx:
         return result.value()
 
     def _generate_end_switch_body(self, state: DFState):
+        if isinstance(state, DFConditionPoint):
+            return self._generate_condition_point_body(state, True)
         result = Outputter()
 
         # Find all transitions that operate on End
