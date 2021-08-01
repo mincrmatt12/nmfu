@@ -1521,12 +1521,40 @@ class LiteralIntegerExpr(IntegerExpr):
     def get_literal_result(self):
         return self.value
 
+    def __eq__(self, other):
+        if not isinstance(other, LiteralIntegerExpr): return False
+        return self.value == other.value and self.typ == other.typ
+
 class OutIntegerExpr(IntegerExpr):
     def __init__(self, ref: "OutputStorage"):
         self.ref = ref
 
     def result_type(self):
         return self.ref.type
+
+    def __eq__(self, other):
+        if not isinstance(other, OutIntegerExpr): return False
+        return other.ref == self.ref
+
+class StringRefIntegerExpr(IntegerExpr):
+    def __init__(self, ref: "OutputStorage", index: IntegerExpr):
+        if not ref.holds_a(OutputStorageType.STR):
+            raise IllegalParseTree("Index expression must be indexing a string", self)
+
+        if not index.result_type() == OutputStorageType.INT:
+            raise IllegalParseTree("Index expression must be an integer", index)
+
+        ProgramData.imbue(index, DebugTag.PARENT, self)
+
+        self.ref = ref
+        self.index = index
+
+    def result_type(self):
+        return OutputStorageType.INT
+
+    def __eq__(self, other):
+        if not isinstance(other, StringRefIntegerExpr): return False
+        return self.ref == other.ref and self.index == other.index
 
 class LastCharIntegerExpr(IntegerExpr):
     def result_type(self):
@@ -1535,8 +1563,11 @@ class LastCharIntegerExpr(IntegerExpr):
     def get_invalid_contexts(self):
         return [IntegerExprUseContext.ASSIGN_INITIAL, IntegerExprUseContext.ASSIGN_ON_END]
 
+    def __eq__(self, other):
+        return isinstance(other, LastCharIntegerExpr)
+
 class MathIntegerExpr(IntegerExpr):
-    def __init__(self, children: List[IntegerExpr]):
+    def __init__(self, children: List[IntegerExpr], valid_type=OutputStorageType.INT):
         self.children = children
         
         for child in self.children:
@@ -1545,8 +1576,9 @@ class MathIntegerExpr(IntegerExpr):
         if not self.children:
             raise IllegalParseTree("Empty math expression", self)
     
-        if not all(x.result_type() == OutputStorageType.INT for x in self.children):
-            raise IllegalParseTree("Invalid arithmetic type", self)
+        if valid_type is not None:
+            if not all(x.result_type() == OutputStorageType.INT for x in self.children):
+                raise IllegalParseTree("Invalid arithmetic type", self)
 
     def result_type(self):
         return self.children[0].result_type()
@@ -1563,6 +1595,9 @@ class MathIntegerExpr(IntegerExpr):
             returned.add(ctx)
             yield ctx
 
+    def __eq__(self, other):
+        return type(other) == type(self) and self.children == other.children
+
 class SumIntegerExpr(MathIntegerExpr):
     def __init__(self, children: List[IntegerExpr], negate: List[bool]):
         super().__init__(children)
@@ -1575,6 +1610,10 @@ class SumIntegerExpr(MathIntegerExpr):
                 total -= operand
             else:
                 total += operand
+
+    def __eq__(self, other):
+        if not isinstance(other, SumIntegerExpr): return False
+        return set(zip(self.children, self.negate)) == set(zip(other.children, other.negate))
 
 class MulIntegerExprOp(enum.Enum):
     MUL = '*'
@@ -1596,6 +1635,64 @@ class MulIntegerExpr(MathIntegerExpr):
             else:
                 total *= operand
 
+    def __eq__(self, other):
+        if not isinstance(other, MulIntegerExpr): return False
+        return self.children == other.children and self.divide == other.divide
+
+class CompareIntegerExprOp(enum.Enum):
+    LT = "<"
+    GT = ">"
+    LE = "<="
+    GE = ">="
+    EQ = "=="
+    NE = "!="
+
+class CompareIntegerExpr(MathIntegerExpr):
+    def __init__(self, left: IntegerExpr, right: IntegerExpr, op: CompareIntegerExprOp):
+        super().__init__([left, right], valid_type=None)
+        self.left = left
+        self.right = right
+        self.op = op
+
+    def __eq__(self, other):
+        if not isinstance(other, CompareIntegerExpr): return False
+        return self.left == other.left and self.right == other.right and self.op == other.op
+
+    def result_type(self):
+        return OutputStorageType.BOOL
+
+    def get_literal_result(self):
+        left = self.left.get_literal_result()
+        right = self.right.get_literal_result()
+
+        if self.op == CompareIntegerExprOp.LT:
+            return left < right
+        elif self.op == CompareIntegerExprOp.GT:
+            return left > right
+        elif self.op == CompareIntegerExprOp.LE:
+            return left <= right
+        elif self.op == CompareIntegerExprOp.LE:
+            return left >= right
+        elif self.op == CompareIntegerExprOp.EQ:
+            return left == right
+        elif self.op == CompareIntegerExprOp.NE:
+            return left != right
+        else:
+            return False
+
+class DisjunctionIntegerExpr(MathIntegerExpr):
+    def __init__(self, children):
+        super().__init__(children, valid_type=OutputStorageType.BOOL)
+
+    def get_literal_result(self):
+        return any(x.get_literal_result() for x in self.children)
+
+class ConjunctionIntegerExpr(MathIntegerExpr):
+    def __init__(self, children):
+        super().__init__(children, valid_type=OutputStorageType.BOOL)
+
+    def get_literal_result(self):
+        return all(x.get_literal_result() for x in self.children)
 
 # ==========
 # GENERAL RE 
@@ -2894,7 +2991,7 @@ class Macro:
                 MacroArgumentKind.HOOK: ("identifier_const",),
                 MacroArgumentKind.LOOP: ("identifier_const",),
                 MacroArgumentKind.MATCH: ("regex", "end_expr", "concat_expr", "string_const", "string_case_const"),
-                MacroArgumentKind.INTEXPR: ("string_const", "sum_expr", "bool_const", "number_const", "char_const", "identifier_const")
+                MacroArgumentKind.INTEXPR: ("string_const", "bool_const", "number_const", "char_const", "identifier_const", *all_sum_expr_nodes)
             }[argspec.kind]
             if value.data not in allowed_types:
                 raise IllegalParseTree("Invalid argument type for argument " + argspec.name, value)
@@ -3063,6 +3160,12 @@ class ParseCtx:
             return SumIntegerExpr([self._parse_integer_expr(x) for x in expr.children[::2]], [False, *(x.value == "-" for x in expr.children[1::2])])
         elif expr.data == "mul_expr":
             return MulIntegerExpr([self._parse_integer_expr(x) for x in expr.children[::2]], [MulIntegerExprOp.MUL, *(MulIntegerExprOp(x.value) for x in expr.children[1::2])])
+        elif expr.data == "comp_expr":
+            return CompareIntegerExpr(self._parse_integer_expr(expr.children[0]), self._parse_integer_expr(expr.children[2]), CompareIntegerExprOp(expr.children[1].value))
+        elif expr.data == "conjunction_expr":
+            return ConjunctionIntegerExpr([self._parse_integer_expr(x) for x in expr.children])
+        elif expr.data == "disjunction_expr":
+            return DisjunctionIntegerExpr([self._parse_integer_expr(x) for x in expr.children])
         else:
             raise IllegalParseTree("Invalid math expression", expr)
 
@@ -3116,7 +3219,7 @@ class ParseCtx:
                 return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr({"true": 1, "false": 0}[expr.children[0].value], result_type), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
             except KeyError as e:
                 raise UndefinedReferenceError("boolean constant", expr.children[0]) from e
-        elif expr.data in ["math_num", "math_var", "builtin_math_var", "sum_expr", "mul_expr", "math_char_const"]:
+        elif expr.data in all_sum_expr_nodes:
             return self._parse_math_expr(expr)
         else:
             raise IllegalParseTree("Invalid expression in integer expr", expr)
@@ -3178,7 +3281,7 @@ class ParseCtx:
             else:
                 sub_expr = stmt.children[1]
             # Check if this is a math expression (only valid append type other than match)
-            if sub_expr.data in ["math_num", "math_var", "builtin_math_var", "sum_expr", "mul_expr"]:
+            if sub_expr.data in all_sum_expr_nodes:
                 # Create an AppendCharTo action
                 return ActionNode(AppendCharTo(self.exception_handlers[ErrorReasons.OUT_OF_SPACE], self._parse_math_expr(sub_expr), targeted))
             # Create an append expression
