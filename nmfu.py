@@ -116,7 +116,7 @@ catch_options: "(" CATCH_OPTION ("," CATCH_OPTION)* ")"
      | regex // not an atom to simplify things
      | "end" -> end_expr
      | "(" expr+ ")" -> concat_expr
-     | "[" sum_expr "]"
+     | "[" _math_expr "]"
 
 atom: BOOL_CONST -> bool_const
     | NUMBER -> number_const
@@ -125,13 +125,18 @@ atom: BOOL_CONST -> bool_const
     | STRING -> string_const
     | IDENTIFIER -> identifier_const
 
+_math_expr: disjunction_expr
+
+?disjunction_expr: conjunction_expr ("||" conjunction_expr)*
+?conjunction_expr: comp_expr ("&&" comp_expr)*
+?comp_expr: sum_expr (CMP_OP sum_expr)?
 ?sum_expr: mul_expr (SUM_OP mul_expr)*
 ?mul_expr: math_atom (MUL_OP math_atom)*
 ?math_atom: NUMBER -> math_num
           | IDENTIFIER -> math_var
           | CHAR_CONSTANT -> math_char_const
           | "$" IDENTIFIER -> builtin_math_var
-          | "(" sum_expr ")"
+          | "(" _math_expr ")"
 
 // REGEX
 
@@ -182,6 +187,7 @@ REGEX_CHARCLASS: /[wWdDsSntr ]/
 // math
 SUM_OP: /[+-]/
 MUL_OP: /[*\/%]/
+CMP_OP: /[!=]=/ | /[<>]=?/
 CHAR_CONSTANT: /'.'/
 
 // comments
@@ -192,6 +198,18 @@ COMMENT: /\s*\/\/[^\n]*/
 %ignore WS
 %ignore COMMENT
 """
+
+all_sum_expr_nodes = [
+    "disjunction_expr",
+    "conjunction_expr",
+    "comp_expr",
+    "sum_expr",
+    "mul_expr",
+    "math_num",
+    "math_var",
+    "math_char_const",
+    "builtin_math_var"
+]
 
 parser = lark.Lark(grammar, propagate_positions=True, lexer="dynamic_complete", start=["start", "regex"])
 
