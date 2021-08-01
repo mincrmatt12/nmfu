@@ -99,6 +99,10 @@ block_stmt: "loop" IDENTIFIER? "{" statement+ "}" -> loop_stmt
           | "optional" "{" statement+ "}" -> optional_stmt
           | "try" "{" statement+ "}" catch_block -> try_stmt
           | "foreach" "{" statement+ "}" "do" "{" foreach_actions "}" -> foreach_stmt
+          | "if" if_condition ("elif" if_condition)* else_condition? -> if_stmt
+
+if_condition: _math_expr "{" statement+ "}"
+else_condition: "else" "{" statement+ "}"
 
 foreach_actions: statement+
 
@@ -290,6 +294,15 @@ class DFTransition:
     def from_key(cls, on_values, inherited):
         return cls(on_values).to(inherited.target).attach(*inherited.actions).fallthrough(inherited.is_fallthrough)
 
+class DFConditionalTransition(DFTransition):
+    def __init__(self, condition: "DFCondition"):
+        super().__init__(on_values=(), fallthrough=True)
+        self.condition = condition
+
+    def constrain(self, *conditions, join_as_or=False):
+        # TODO: work properly
+        self.condition = conditions[0]
+
 class DFState:
     all_states = {}
 
@@ -298,6 +311,8 @@ class DFState:
         DFState.all_states[id(self)] = self
 
     def transition(self, transition, allow_replace=False, allow_replace_if=None):
+        if isinstance(transition, DFConditionalTransition):
+            raise IllegalDFAStateError("Invalid condition transition on normal state", self)
         # Add parent relationship if this is a new transition
         if ProgramData.lookup(transition, DebugTag.PARENT) is None:
             ProgramData.imbue(transition, DebugTag.PARENT, self)
@@ -392,6 +407,86 @@ class DFState:
                     return i
             if DFTransition.Else != data:
                 return self[DFTransition.Else]
+
+class DFConditionPoint(DFState):
+    """
+    Represents a single "condition point": a node which only has fallthrough conditional-transitions. A conditional-transition
+    doesn't match input, rather it just selects some unambiguous path to continue on
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.transitions = []
+
+    def transition(self, transition):
+        if transition in self.transitions:
+            return
+        # TODO: conflicts
+        self.transitions.append(transition)
+
+    def __getitem__(self, key):
+        raise NotImplementedError()
+    def __delitem__(self, key):
+        raise NotImplementedError()
+    def __setitem__(self, key):
+        raise NotImplementedError()
+
+    def equivalent_on_values(self, treat_as_else=None):
+        """
+        Compute an "equivalent" set of on_values, such that taking any one will have at least one valid path through all directly-attached condition points, in addition
+        to a set of on_values which map to the treat_as_else state in _all_ outcomes.
+
+        i.e. for  a -t-> b -<c>-> c
+                   \-f-> d -<else>-> e
+                          \-<f>-> ELSE
+
+        we'd return ({c, else}, {f}), since f should go to an error state in some equivalent state E replacing a, and c/else should continue on. This lets us rewrite the dfa as
+
+        E -{c,else}=> a -> ...
+         \-f=> ELSE 
+
+        which is a valid construction for append_after.
+        """
+
+        if not isinstance(treat_as_else, (set, frozenset, list, tuple)):
+            treat_as_else = [treat_as_else]
+
+        encountered = set()
+        candidate_else = set()
+
+        visited = set()
+        sources = set()
+
+        def aux(state):
+            if state in visited:
+                return
+            visited.add(state)
+            if isinstance(state, DFConditionPoint):
+                for t in state.all_transitions():
+                    aux(t.target)
+            else:
+                sources.add(state)
+                for t in state.all_transitions():
+                    if t.target in treat_as_else:
+                        candidate_else.update(t.on_values)
+                    else:
+                        encountered.update(t.on_values)
+
+        aux(self)
+
+        filtered = set()
+        for possible in candidate_else:
+            for state in sources:
+                if state[possible] is None:
+                    continue
+                if state[possible].target not in treat_as_else:
+                    filtered.add(possible)
+
+        encountered.update(filtered)
+        candidate_else.difference_update(filtered)
+
+        return encountered, candidate_else
+        
 
 class DFA:
     all_state_machines = {}
@@ -536,6 +631,17 @@ class DFA:
 
         if type(treat_as_else) is DFState:
             treat_as_else = (treat_as_else,)
+
+        if isinstance(chained_dfa.starting_state, DFConditionPoint):
+            # Add an extra state that will represent the condition point properly (see docs for equivalent_on_values)
+            valid, to_else = chained_dfa.starting_state.equivalent_on_values(treat_as_else)
+            print(valid, to_else)
+            fake_start = DFState()
+            fake_start[valid] = chained_dfa.starting_state
+            fake_start[to_else] = treat_as_else[0]
+            fake_start[valid].fallthrough(True)
+            fake_start[to_else].fallthrough(True)
+            chained_dfa.starting_state = fake_start
 
         # First, add transitions between each of the sub_states corresponding to the transitions of the original starting node
         for sub_state in sub_states:
@@ -1482,6 +1588,7 @@ class IntegerExprUseContext(enum.Enum):
     ASSIGN_ON_MATCH = 0
     ASSIGN_INITIAL = 1
     ASSIGN_ON_END = 2
+    CONDITION_PREDICATE = 3
 
 class IntegerExpr(abc.ABC):
     @abc.abstractmethod
@@ -1696,6 +1803,75 @@ class ConjunctionIntegerExpr(MathIntegerExpr):
 
     def get_literal_result(self):
         return all(x.get_literal_result() for x in self.children)
+
+# ==========
+# CONDITIONS
+# ==========
+
+class DFCondition:
+    def __init__(self):
+        pass
+
+    def is_literal(self):
+        """
+        Is this condition's value computable now
+        """
+
+        return False
+
+    def get_literal_result(self):
+        """
+        Is this condition active now?
+        """
+
+        return False
+
+    def conflicts_with(self, other):
+        return False
+
+    def make_nonconflicting(self, other):
+        """
+        Returns (only_self, both, only_other)
+        """
+
+        return (self, ConstantCondition(False), other)
+
+class ConstantCondition(DFCondition):
+    def __init__(self, value: bool):
+        self.value = value
+
+    def is_literal(self): return True
+    def get_literal_result(self): return self.value
+
+    def conflicts_with(self, other):
+        return self.value
+
+    def make_nonconflicting(self, other):
+        if self.value:
+            return (ConstantCondition(False), other, ConstantCondition(False))
+        else:
+            return super().make_nonconflicting(other)
+
+class ElseCondition(ConstantCondition):
+    def __init__(self):
+        super().__init__(True)
+
+class IntegerCondition(DFCondition):
+    def __init__(self, expr: IntegerExpr):
+        if expr.result_type() != OutputStorageType.BOOL:
+            if expr.result_type() == OutputStorageType.INT:
+                expr = CompareIntegerExpr(expr, LiteralIntegerExpr(0), CompareIntegerExprOp.NE)
+            else:
+                raise IllegalParseTree("Condition must be convertable to bool", expr)
+
+        if IntegerExprUseContext.CONDITION_PREDICATE in expr.get_invalid_contexts():
+            raise IllegalParseTree("Expression not valid for use as a predicate", expr)
+
+        self.expr = expr
+
+    def is_literal(self): return self.expr.is_literal()
+    def get_literal_result(self): return self.expr.get_literal_result()
+
 
 # ==========
 # GENERAL RE 
@@ -2956,6 +3132,60 @@ class ForeachNode(ActionSinkNode, ActionSourceNode):
 
         return sub_dfa
 
+class IfElseNode(ActionSinkNode):
+    def __init__(self, branches: List[DFCondition], branch_bodies: Dict[DFCondition, Node]):
+        self.branches = branches 
+        self.branch_bodies = branch_bodies
+        self.branch_actions = {}
+
+        self.after_actions = []
+        self.next = None
+
+        # Adopt all branch actions
+        for condition in self.branches:
+            if isinstance(self.branch_bodies[condition], ActionSourceNode):
+                self.branch_actions[condition], self.branch_bodies[condition] = self.branch_bodies[condition].adopt_actions_from()
+            else:
+                self.branch_actions[condition] = []
+
+    def _set_next(self, next_node):
+        self.next = next_node
+
+    def get_next(self):
+        return self.next
+
+    def _adopt_actions(self, actions):
+        if any(x.get_mode() != ActionMode.AT_FINISH for x in actions):
+            raise IllegalASTStateError("Invalid action after if condition", self)
+
+        self.after_actions.extend(actions)
+
+    def _generate_null_dfa(self):
+        null = DFA()
+        null.add(DFState())
+        null.mark_accepting(null.starting_state)
+        return null
+
+    def convert(self, current_error_handlers):
+        # Generate condition dfa + start node
+        dfa = DFA()
+        cond_point = DFConditionPoint()
+        dfa.add(cond_point)
+        dfa.starting_state = cond_point
+
+        sub_dfas = {x: y.convert(current_error_handlers) if y is not None else self._generate_null_dfa() for x, y in self.branch_bodies.items()}
+
+        for x in self.branches:
+            for i in sub_dfas[x].states:
+                dfa.add(i)
+                if i in sub_dfas[x].accepting_states:
+                    dfa.mark_accepting(i)
+            cond_point.transition(DFConditionalTransition(x).attach(*self.branch_actions[x]).to(sub_dfas[x].starting_state))
+
+        if self.next is not None:
+            dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH], chain_actions=self.after_actions)
+        return dfa
+
 class MacroArgumentKind(enum.Enum):
     MACRO = 0
     OUT = 1
@@ -3358,7 +3588,7 @@ class ParseCtx:
                     if name in self.hooks:
                         return ActionNode(ProgramData.imbue(ProgramData.imbue(CallHook(name), DebugTag.SOURCE_LINE, stmt.line), DebugTag.SOURCE_COLUMN, stmt.column))
                     else:
-                        raise UndefinedReferenceError("macro or hook", stmt.children[0])
+                        raise UndefinedReferenceError("callable", stmt.children[0])
         elif stmt.data == "finish_stmt":
             act = FinishAction()
             ProgramData.imbue(act, DebugTag.SOURCE_LINE, stmt.line)
@@ -3388,6 +3618,27 @@ class ParseCtx:
             # Find all of the matches
             return ProgramData.imbue(ProgramData.imbue(CaseNode({k: v for k, v in (self._parse_case_clause(x) for x in stmt.children)}), 
                 DebugTag.SOURCE_LINE, stmt.line),
+                DebugTag.SOURCE_COLUMN, stmt.column
+            )
+        elif stmt.data == "if_stmt":
+            conditions_ordered = []
+            condition_map = {}
+            for condition_tree in stmt.children:
+                if condition_tree.data == "else_condition":
+                    condition = ElseCondition()
+                    condition_map[condition] = self._parse_stmt_seq(condition_tree.children)
+                else:
+                    condition = IntegerCondition(self._parse_integer_expr(condition_tree.children[0]))
+                    condition_map[condition] = self._parse_stmt_seq(condition_tree.children[1:])
+
+                ProgramData.imbue(condition,
+                    DebugTag.SOURCE_LINE, condition_tree.line,
+                    DebugTag.SOURCE_COLUMN, condition_tree.column
+                )
+                conditions_ordered.append(condition)
+            return ProgramData.imbue(
+                IfElseNode(conditions_ordered, condition_map),
+                DebugTag.SOURCE_LINE, stmt.line,
                 DebugTag.SOURCE_COLUMN, stmt.column
             )
         elif stmt.data == "optional_stmt":
@@ -4196,6 +4447,9 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
     nodes = []
     edges = []
 
+    def build_label_condition(condition: DFCondition):
+        return graphviz.escape(repr(condition))
+
     def build_label_onvalues(on_values):
         on_values_remaining = list(on_values)
         on_values_remaining.sort(key=lambda x: x if isinstance(x, str) else '')
@@ -4269,14 +4523,19 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
         parent_id >>= (64-24)
         parent_id |= 0x808080
         parent_color = "#" + format(parent_id, "06x")
-        g.node(str(id(state)), shape=shape, label=str(j), style="filled", fillcolor=parent_color)
+        g.node(str(id(state)), shape=shape, label=str(j), style="filled,dashed" if isinstance(state, DFConditionPoint) else "filled", fillcolor=parent_color)
         for transition in state.all_transitions():
-            if not transition.target or not transition.on_values:
-                continue
-            label = build_label_onvalues(transition.on_values)
+            if isinstance(transition, DFConditionalTransition):
+                if transition.condition.is_literal() and transition.condition.get_literal_result() == False:
+                    continue
+                label = build_label_condition(transition.condition)
+            else:
+                if not transition.target or not transition.on_values:
+                    continue
+                label = build_label_onvalues(transition.on_values)
+                if (frozenset(transition.on_values), transition.target) in ignored_transitions:
+                    continue
             is_real = True
-            if (frozenset(transition.on_values), transition.target) in ignored_transitions:
-                continue
 
             for action in transition.actions:
                 acname = ProgramData.lookup(action, DebugTag.NAME, recurse_upwards=False)
@@ -4448,6 +4707,29 @@ def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=Non
                     sub_coming_from.append(ematch_node)
 
                 next_coming_from.extend(debug_dump_ast(sub_ast, into=c, coming_from=sub_coming_from, make_id=make_id, make_subgraph=make_subgraph))
+
+            coming_from = next_coming_from
+
+        elif isinstance(ast, IfElseNode):
+            start_node = make_id()
+            c.node(start_node, "", style="filled", shape="circle", color="grey")
+            tie_to(start_node)
+
+            next_coming_from = []
+
+            for j, condition in enumerate(ast.branches):
+                sub_ast = ast.branch_bodies[condition]
+                sub_coming_from = []
+                ematch_node = make_id()
+                c.node(ematch_node, f"{j}: {label_of(condition)}")
+
+                tie_to(ematch_node, [start_node], extra_kwargs={"label": "\n".join(label_of(x) for x in ast.branch_actions[condition])})
+                sub_coming_from.append(ematch_node)
+
+                if sub_ast:
+                    next_coming_from.extend(debug_dump_ast(sub_ast, into=c, coming_from=sub_coming_from, make_id=make_id, make_subgraph=make_subgraph))
+                else:
+                    next_coming_from.append(ematch_node)
 
             coming_from = next_coming_from
         
