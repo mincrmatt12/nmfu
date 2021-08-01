@@ -438,7 +438,7 @@ class DFConditionPoint(DFState):
         raise NotImplementedError()
 
     def equivalent_on_values(self, treat_as_else=None):
-        """
+        r"""
         Compute an "equivalent" set of on_values, such that taking any one will have at least one valid path through all directly-attached condition points, in addition
         to a set of on_values which map to the treat_as_else state in _all_ outcomes.
 
@@ -1865,11 +1865,16 @@ class ConstantCondition(DFCondition):
         else:
             return super().make_nonconflicting(other)
 
-class ElseCondition(ConstantCondition):
+class ElseCondition(ConstantCondition, HasDefaultDebugInfo):
     def __init__(self):
         super().__init__(True)
 
-class IntegerCondition(DFCondition):
+    def debug_lookup(self, tag):
+        if tag == DebugTag.NAME:
+            return "else"
+        return None
+
+class IntegerCondition(DFCondition, HasDefaultDebugInfo):
     def __init__(self, expr: IntegerExpr):
         if expr.result_type() != OutputStorageType.BOOL:
             if expr.result_type() == OutputStorageType.INT:
@@ -1884,6 +1889,11 @@ class IntegerCondition(DFCondition):
 
     def is_literal(self): return self.expr.is_literal()
     def get_literal_result(self): return self.expr.get_literal_result()
+
+    def debug_lookup(self, tag):
+        if tag == DebugTag.NAME:
+            return "if condition"
+        return None
 
 
 # ==========

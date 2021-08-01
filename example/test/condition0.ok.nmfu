@@ -1,0 +1,22 @@
+out int sum = 0;
+out int parse = 0;
+
+parser {
+    loop {
+        if sum >= 500 {
+            finish;
+        }
+        elif sum > 600 {
+            sum = [sum - 500];
+        }
+
+        parse = 0;
+        foreach {
+            /\d+/;
+        } do {
+            parse = [parse * 10 + ($last - '0')];
+        }
+        sum = [sum + parse];
+        wait "\n";
+    }
+}
