@@ -1,0 +1,10 @@
+// ok: test
+
+parser {
+    loop outer {
+        loop inner {
+            "test";
+            break outer;
+        }
+    }
+}

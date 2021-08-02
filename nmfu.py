@@ -793,6 +793,19 @@ class DFA:
             for state in chained_dfa.accepting_states:
                 self.mark_accepting(state)
 
+    def chain_actions_at_end(self, actions: Iterable["Action"]):
+        """
+        Attempt to chain the given actions on all transitions pointing into accept states. If these actions cannot be scheduled once (if requested) an error will be thrown
+        """
+
+        for finish in self.accepting_states:
+            for incoming, trans in self.transitions_pointing_to(finish, include_states=True):
+                for action in actions:
+                    if action.is_timing_strict() and any(not x.error_handling for x in finish.transitions):
+                        # Complain early
+                        raise IllegalDFAStateConflictsError("Unable to schedule finish actions only once", trans, action)
+                    else:
+                        trans.attach(action)
 
 # =============
 # DEBUG STORAGE
@@ -1449,6 +1462,9 @@ class SetTo(Action, HasDefaultDebugInfo):
 
     def get_mode(self):
         return ActionMode.AT_FINISH
+
+    def is_timing_strict(self):
+        return True  # TODO: make this check if the expr references the into_storage
 
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
@@ -3056,6 +3072,8 @@ class OptionalNode(ActionSinkNode):
         # If we need to, add a boring after thing
         if self.next is not None:
             sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH], chain_actions=self.finish_actions)
+        else:
+            sub_dfa.chain_actions_at_end(self.finish_actions)
 
         return sub_dfa
 
@@ -3207,6 +3225,8 @@ class TryExceptNode(ActionSinkNode, ActionSourceNode):
         # If there is a next node, append it
         if self.next is not None:
             sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH], chain_actions=self.after_actions)
+        else:
+            sub_dfa.chain_actions_at_end(self.after_actions)
 
         return sub_dfa
 
@@ -3256,6 +3276,8 @@ class ForeachNode(ActionSinkNode, ActionSourceNode):
 
         if self.next is not None:
             sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH], chain_actions=self.after_actions)
+        else:
+            sub_dfa.chain_actions_at_end(self.after_actions)
 
         return sub_dfa
 
@@ -3320,6 +3342,8 @@ class IfElseNode(ActionSinkNode):
 
         if self.next is not None:
             dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH], chain_actions=self.after_actions)
+        else:
+            dfa.chain_actions_at_end(self.after_actions)
         return dfa
 
 class MacroArgumentKind(enum.Enum):

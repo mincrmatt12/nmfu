@@ -1,0 +1,15 @@
+// ok: asdf;
+
+out int x;
+
+parser {
+    loop {
+        foreach {
+            /\w+/;
+            ";";
+        } do {
+            x = 5;
+        }
+        break;
+    }
+}
