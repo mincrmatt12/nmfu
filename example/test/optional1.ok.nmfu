@@ -1,3 +1,7 @@
+// ok: text
+// ok: --
+// bad: -
+
 parser {
     optional {
         "--";

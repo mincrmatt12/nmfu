@@ -1,3 +1,7 @@
+// ok: hello r
+// bad: hello there
+// bad: hello 
+
 parser {
     loop {
         try {

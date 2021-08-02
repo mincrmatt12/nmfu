@@ -80,9 +80,33 @@ def common_run_int_test(pt):
     cctx.generate_header()
     cctx.generate_source()
 
+    return dctx.dfa
+
 @pytest.mark.parametrize("filename", example_files_ok)
 def test_ok(filename):
-    common_run_int_test(common_parse_int_test(filename))
+    final_dfa = common_run_int_test(common_parse_int_test(filename))
+
+    with open(filename) as f:
+        source = f.read()
+
+    lines = source.splitlines(keepends=False)
+    testcases = []
+    i = 0
+    while lines[i].startswith("// ok: "):
+        testcases.append(lines[i][len("// ok: "):])
+        i += 1
+
+    for case in testcases:
+        assert final_dfa.simulate_accepts(case)
+
+    testcases = []
+
+    while lines[i].startswith("// bad: "):
+        testcases.append(lines[i][len("// bad: "):])
+        i += 1
+
+    for case in testcases:
+        assert not final_dfa.simulate_accepts(case)
 
 @pytest.mark.parametrize("filename", example_files_fail)
 def test_fail(filename):

@@ -1,10 +1,15 @@
+// ok: help you
+// ok: hrrllp you
+// ok: asdf end
+// bad: asdf
+
 parser {
     case {
         "help", /hr+.lp/ -> {
             " you";
         }
         else -> {
-            wait "\r\n";
+            wait "end";
         }
     }
 }

@@ -551,7 +551,7 @@ class DFA:
                         if action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_OTHER:
                             position = action.get_target_override_target()
                         elif action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_UNDEFINED:
-                            return None
+                            return action
                     if not transition.is_fallthrough:
                         break
             except AttributeError:
@@ -561,6 +561,18 @@ class DFA:
                     return position
 
         return position
+
+    def simulate_accepts(self, actions):
+        """
+        Determine if a given input ends with a success or fail (considers FinishAction)
+        """
+
+        result = self.simulate(actions)
+        if result in self.accepting_states:
+            return True
+        if isinstance(result, FinishAction):
+            return True
+        return False
 
     def dfs(self):
         """
