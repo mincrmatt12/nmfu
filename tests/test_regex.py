@@ -23,7 +23,7 @@ EXAMPLE_REGEXES = [
 @pytest.fixture(scope="module", params=EXAMPLE_REGEXES)
 def match_fixture(request):
     x = request.param
-    result = nmfu.RegexMatch(nmfu.parser.parse('/' + x.decode("ascii") + '/', start="regex")).convert(defaultdict(lambda: None)), re.compile(x), x
+    result = nmfu.RegexMatch(nmfu.parser.parse('/' + x.decode("ascii") + '/', start="regex")).convert(defaultdict(lambda: None)), re.compile(x, re.DOTALL), x
     assert result[0].is_valid()
     return result
 

@@ -12,5 +12,6 @@ def test_equivalent_state_gen():
     b['c'] = c
     d[nmfu.DFTransition.Else] = e
     d['f'] = None
+    d['f'].handles_else()
 
     assert a.equivalent_on_values() == ({'c', nmfu.DFTransition.Else}, {'f'})

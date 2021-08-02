@@ -3,7 +3,7 @@ out int sum = 0;
 parser {
     /["e]+/;
     if sum > 0 {
-        /"hi/;
+        /[^"]+"/;
     }
     else {
         "earl";

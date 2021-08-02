@@ -244,7 +244,7 @@ class DFTransition:
     Else = type('_DFElse', (), {'__repr__': lambda x: "Else"})()
     End = type('_DFEnd', (), {'__repr__': lambda x: "End"})()
 
-    def __init__(self, on_values=None, fallthrough=False):
+    def __init__(self, on_values=None, fallthrough=False, error_handling=False):
         if type(on_values) is not list:
             if type(on_values) is str or on_values in [DFTransition.Else, DFTransition.End]:
                 on_values = [on_values]
@@ -256,6 +256,7 @@ class DFTransition:
         self.on_values = on_values
         self.target = None
         self.is_fallthrough = fallthrough
+        self.error_handling = error_handling
         self.actions = []
 
     def copy(self):
@@ -264,13 +265,15 @@ class DFTransition:
         my_copy.actions = self.actions.copy()
         my_copy.target = self.target
         my_copy.is_fallthrough = self.is_fallthrough
+        my_copy.error_handling = self.error_handling
         return my_copy
 
     def __repr__(self):
+        error = "error " if self.error_handling else ""
         if self.actions:
-            return f"<DFTransition on={self.on_values} to={self.target} actions={self.actions} fallthough={self.is_fallthrough}>"
+            return f"<DFTransition {error}on={self.on_values} to={self.target} actions={self.actions} fallthough={self.is_fallthrough}>"
         else:
-            return f"<DFTransition on={self.on_values} to={self.target} fallthough={self.is_fallthrough}>"
+            return f"<DFTransition {error}on={self.on_values} to={self.target} fallthough={self.is_fallthrough}>"
 
     def attach(self, *actions, prepend=False):
         if prepend:
@@ -290,9 +293,13 @@ class DFTransition:
         self.is_fallthrough = fall
         return self
 
+    def handles_else(self, handles=True):
+        self.error_handling = handles
+        return self
+
     @classmethod
     def from_key(cls, on_values, inherited):
-        return cls(on_values).to(inherited.target).attach(*inherited.actions).fallthrough(inherited.is_fallthrough)
+        return cls(on_values).to(inherited.target).attach(*inherited.actions).fallthrough(inherited.is_fallthrough).handles_else(inherited.error_handling)
 
 class DFConditionalTransition(DFTransition):
     def __init__(self, condition: "DFCondition"):
@@ -328,29 +335,30 @@ class DFState:
         else:
             allow_replace = allow_replace_if
 
-        contained = None
+        contained = set()
         for i in self.all_transitions():
             if set(i.on_values) & set(transition.on_values):
-                contained = i
+                contained.add(i)
                 break
-        if contained is not None and (contained.target != transition.target or contained.is_fallthrough != transition.is_fallthrough):
-            if allow_replace(contained):
-                for x in transition.on_values:
-                    try:
-                        contained.on_values.remove(x)
-                    except ValueError:
-                        continue
-                if not contained.on_values:
-                    self.transitions.remove(contained)
-            else:
-                raise IllegalDFAStateError("Duplicate transition", self)
-        elif contained is not None:
+        if contained and any(x.target != transition.target or x.is_fallthrough != transition.is_fallthrough or x.error_handling != transition.error_handling for x in contained):
+            for contain in contained:
+                if allow_replace(contain):
+                    for x in transition.on_values:
+                        try:
+                            contain.on_values.remove(x)
+                        except ValueError:
+                            continue
+                    if not contain.on_values:
+                        self.transitions.remove(contain)
+                else:
+                    raise IllegalDFAStateError("Duplicate transition", self)
+        elif contained:
             return # don't add duplicate entries in the table
 
         # Check if we can "inline" this transition
         if collapse_else:
             for transition_in in self.transitions:
-                if transition_in.actions == transition.actions and transition_in.target == transition.target and transition_in.is_fallthrough == transition.is_fallthrough:
+                if transition_in.actions == transition.actions and transition_in.target == transition.target and transition_in.is_fallthrough == transition.is_fallthrough and transition_in.error_handling == transition.error_handling:
                     if DFTransition.Else in transition_in.on_values or DFTransition.Else in transition.on_values:
                         transition_in.on_values = [DFTransition.Else]
                     else:
@@ -415,6 +423,18 @@ class DFState:
             if DFTransition.Else != data:
                 return self[DFTransition.Else]
 
+    def local_alphabet(self, excluding=(DFTransition.Else,)) -> Set:
+        """
+        Get the 'local alphabet': all symbols that are matched by this state excluding some set.
+        """
+
+        local_alphabet = set()
+        for trans in self.transitions:
+            for i in trans.on_values:
+                if i in excluding: continue
+                local_alphabet.add(i)
+        return local_alphabet
+
 class DFConditionPoint(DFState):
     """
     Represents a single "condition point": a node which only has fallthrough conditional-transitions. A conditional-transition
@@ -438,7 +458,7 @@ class DFConditionPoint(DFState):
     def __setitem__(self, key):
         raise NotImplementedError()
 
-    def equivalent_on_values(self, treat_as_else=None):
+    def equivalent_on_values(self):
         r"""
         Compute an "equivalent" set of on_values, such that taking any one will have at least one valid path through all directly-attached condition points, in addition
         to a set of on_values which map to the treat_as_else state in _all_ outcomes.
@@ -454,9 +474,6 @@ class DFConditionPoint(DFState):
 
         which is a valid construction for append_after.
         """
-
-        if not isinstance(treat_as_else, (set, frozenset, list, tuple)):
-            treat_as_else = [treat_as_else]
 
         encountered = set()
         candidate_else = set()
@@ -474,7 +491,7 @@ class DFConditionPoint(DFState):
             else:
                 sources.add(state)
                 for t in state.all_transitions():
-                    if t.target in treat_as_else:
+                    if t.error_handling:
                         candidate_else.update(t.on_values)
                     else:
                         encountered.update(t.on_values)
@@ -486,7 +503,7 @@ class DFConditionPoint(DFState):
             for state in sources:
                 if state[possible] is None:
                     continue
-                if state[possible].target not in treat_as_else:
+                if not state[possible].error_handling:
                     filtered.add(possible)
 
         encountered.update(filtered)
@@ -578,6 +595,23 @@ class DFA:
         aux(self.starting_state)
         return visited
 
+    def error_handling_transitions(self, include_states=False):
+        """
+        Return a set of all transitions that are marked as error handling from the start state
+        """
+
+        result = set()
+
+        for state in self.dfs():
+            for t in state.all_transitions():
+                if t.error_handling:
+                    if include_states:
+                        result.add((state, t))
+                    else:
+                        result.add(t)
+
+        return result
+
 
     def transitions_pointing_to(self, target_state: DFState, include_states=False):
         """
@@ -623,7 +657,7 @@ class DFA:
 
         return False
 
-    def append_after(self, chained_dfa: "DFA", treat_as_else: Union[DFState, List[DFState]], sub_states=None, mark_accept=True, chain_actions=None):
+    def append_after(self, chained_dfa: "DFA", error_handling_state: DFState, sub_states=None, mark_accept=True, chain_actions=None):
         """
         Add the chained_dfa in such a way that its start state "becomes" all of the `sub_states` (or if unspecified, the accept states of _this_ dfa)
 
@@ -636,52 +670,98 @@ class DFA:
         if sub_states is None:
             sub_states = self.accepting_states
 
-        if type(treat_as_else) is DFState:
-            treat_as_else = (treat_as_else,)
-
         if chain_actions is None:
             chain_actions = []
 
         if isinstance(chained_dfa.starting_state, DFConditionPoint):
             # Add an extra state that will represent the condition point properly (see docs for equivalent_on_values)
-            valid, to_else = chained_dfa.starting_state.equivalent_on_values(treat_as_else)
+            valid, to_else = chained_dfa.starting_state.equivalent_on_values()
             fake_start = DFState()
             chained_dfa.add(fake_start)
             # If there were any actual states, tie them
             if valid and to_else:
                 fake_start[valid] = chained_dfa.starting_state
-                fake_start[to_else] = treat_as_else[0]
+                fake_start[to_else] = error_handling_state
                 fake_start[valid].fallthrough(True)
-                fake_start[to_else].fallthrough(True)
+                fake_start[to_else].fallthrough(True).handles_else()
             else:
                 # Otherwise, just add a generic catch-all else
                 fake_start[DFTransition.Else] = chained_dfa.starting_state
             chained_dfa.starting_state = fake_start
 
-        chained_transitions = [x for x in chained_dfa.starting_state.transitions if DFTransition.Else not in x.on_values]
-        chained_transitions.extend(x for x in chained_dfa.starting_state.transitions if DFTransition.Else in x.on_values)
+        # Check for ambiguity: if any transitions added to a sub_state try to redirect a valid character a different valid
+        # state, there is ambiguity. In other words, we only want to add transitions that would previously lead to the error state.
 
-        # First, add transitions between each of the sub_states corresponding to the transitions of the original starting node
+        chained_transitions = [x for x in chained_dfa.starting_state.transitions if DFTransition.Else in x.on_values]
+        chained_transitions.extend(x for x in chained_dfa.starting_state.transitions if DFTransition.Else not in x.on_values)
+
+        chained_local_alphabet = chained_dfa.starting_state.local_alphabet()
+        valid_replacers = set()
+
+        for transition in chained_transitions:
+            if transition.error_handling:
+                continue
+            valid_replacers.add(transition.target)
+
         for sub_state in sub_states:
-            for transition in chained_transitions: # specifically exclude the else transition
-                try:
-                    sub_state.transition(transition.copy().attach(*chain_actions, prepend=True), allow_replace_if=lambda x: x.target in treat_as_else)
-                except IllegalDFAStateError as e:
-                    # Check if this is a transition to an else case
-                    if transition.target in treat_as_else:
-                        # Check if there are any additional tokens which _aren't_ problematic
-                        ok_tokens = []
-                        for i in transition.on_values:
-                            if sub_state[i] is None or sub_state[i].target in treat_as_else:
-                                ok_tokens.append(i)
-                        if ok_tokens:
-                            new_transition = transition.copy()
-                            new_transition.on_values = ok_tokens
-                            sub_state.transition(new_transition.attach(*chain_actions, prepend=True), allow_replace_if=lambda x: x.target in treat_as_else, collapse_else=False)
-                        continue
-                    debug_dump_dfa(chained_dfa)
-                    # Rewrite the error as something more useful
-                    raise IllegalDFAStateConflictsError("Ambiguous transitions detected while joining matches", sub_state, chained_dfa.starting_state) from e
+            # Compute the "local else additions": what things that are matched by Else in the chained start state which Else in the sub_state does _not_ match.
+            # Note that we only handle this in one direction; technically sub_state[Else] could refer to a smaller set than chained.start[Else] but that shouldn't
+            # matter too much.
+
+            sub_local_alphabet = sub_state.local_alphabet()
+            local_else_additions = sub_local_alphabet - chained_local_alphabet
+
+            for transition in chained_transitions:
+                relevant_values = set(transition.on_values)
+                if DFTransition.Else in relevant_values:
+                    relevant_values.update(local_else_additions)
+                target = sub_state[relevant_values]
+                if target is None:
+                    targets = set()
+                    target_map = {}
+                    for value in relevant_values:
+                        v = sub_state[value]
+                        if v is None:
+                            continue
+                        targets.add(v)
+                        if v not in target_map: target_map[v] = set()
+                        target_map[v].add(value)
+                else:
+                    targets = {target} 
+                    target_map = {target: relevant_values}
+
+                if transition.error_handling:
+                    # Ignore
+                    continue
+
+                if not all(x.error_handling or x.target == transition.target for x in targets):
+                    if ProgramData.dump(DebugDumpable.DFA) and ProgramData.do(ProgramFlag.VERBOSE_AMBIG_ERRORS):
+                        debug_dump_dfa(self, "ae_dfa2", highlight=sub_state)
+                        debug_dump_dfa(chained_dfa, "ae_dfa1")
+                    dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("TT", transition)
+                    dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("TA", targets)
+                    dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("RV", relevant_values)
+                    dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("TE", error_handling_state)
+                    raise IllegalDFAStateConflictsError("Ambiguous transitions detected while joining DFAs", sub_state, transition)
+
+            for transition in chained_transitions:
+                relevant_values = set(transition.on_values)
+                if DFTransition.Else in relevant_values:
+                    relevant_values.update(local_else_additions)
+                # If this is an error-handler, be sure to cull to avoid duplicates
+                if transition.error_handling:
+                    for j in relevant_values.copy():
+                        if sub_state[j] is not None and not sub_state[j].error_handling:
+                            relevant_values.remove(j)
+                # This transition is OK, and so we can add it.
+                new_transition = transition.copy()
+                new_transition.on_values = list(relevant_values)
+                #print("NTT", new_transition)
+                #print(valid_replacers)
+                #print(new_transition, transition)
+                #debug_dump_dfa(chained_dfa, "dfa1")
+                #debug_dump_dfa(self, "dfa2", sub_state)
+                sub_state.transition(new_transition.attach(*chain_actions, prepend=True), allow_replace_if=lambda x: x.error_handling or x.target in valid_replacers)
 
         # Adopt all the states
         while chained_dfa.states:
@@ -723,9 +803,10 @@ class ProgramFlag(int, enum.Enum):
         return obj
 
     # Verbosity options (enabled by various levels of -v or, ofc, -f)
-    VERBOSE_REGEX_CCLASS = 0
-    VERBOSE_OPTIMIZE_RESULTS = 1
-    VERBOSE_SIMPLIFY_TM = 2
+    VERBOSE_REGEX_CCLASS = 200
+    VERBOSE_OPTIMIZE_RESULTS = 201
+    VERBOSE_SIMPLIFY_TM = 202
+    VERBOSE_AMBIG_ERRORS = 203
 
     # Optimization flags, set in ProgramData
     # DFA optimization options (enabled by various levels of -O)
@@ -1525,7 +1606,7 @@ class DirectMatch(Match, HasDefaultDebugInfo):
             next_state = DFState()
             start_action_holder = (self.start_actions if j == 0 else [])
             t = DFTransition([character]).attach(*start_action_holder, *self.char_actions).to(next_state)
-            state[DFTransition.Else] = DFTransition().to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*start_action_holder).fallthrough()
+            state[DFTransition.Else] = DFTransition().to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*start_action_holder).fallthrough().handles_else()
             if j == len(self.match_contents) - 1:
                 t.attach(*self.finish_actions)
                 sm.mark_accepting(next_state)
@@ -1569,7 +1650,7 @@ class CaseDirectMatch(Match, HasDefaultDebugInfo):
             next_state = DFState()
             start_action_holder = (self.start_actions if j == 0 else [])
             t = DFTransition(self._create_casei_from(character)).attach(*start_action_holder, *self.char_actions).to(next_state)
-            state[DFTransition.Else] = DFTransition().to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*start_action_holder).fallthrough()
+            state[DFTransition.Else] = DFTransition().to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*start_action_holder).fallthrough().handles_else()
             if j == len(self.match_contents) - 1:
                 t.attach(*self.finish_actions)
                 sm.mark_accepting(next_state)
@@ -2517,7 +2598,7 @@ class RegexMatch(Match):
                         if x in conflict.on_values:
                             conflict.on_values.remove(x)
 
-            new_state.transition(DFTransition(list(source)).to(target).attach(*actions).fallthrough(target == else_path))
+            new_state.transition(DFTransition(list(source)).to(target).attach(*actions).fallthrough(target == else_path).handles_else(target == else_path))
 
         return new_state
 
@@ -2563,7 +2644,7 @@ class WaitMatch(Match):
     def convert(self, current_error_handlers: dict):
         sm = self.match_contents.convert(current_error_handlers)
         for state, trans in sm.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH], True):
-            trans.to(sm.starting_state)
+            trans.to(sm.starting_state).handles_else()  # we make these error handling since that makes semantic sense for the usual use case for a wait node
             if state == sm.starting_state:
                 trans.fallthrough(False).attach(*self.char_actions)
         return sm
@@ -2583,7 +2664,7 @@ class EndMatch(Match):
         sm.add(ok_state)
         sm.mark_accepting(ok_state)
         start_state.transition(DFTransition([DFTransition.End]).attach(*self.start_actions, *self.char_actions, *self.finish_actions).to(ok_state))
-        start_state.transition(DFTransition([DFTransition.Else]).to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*self.start_actions).fallthrough())
+        start_state.transition(DFTransition([DFTransition.Else]).to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*self.start_actions).fallthrough().handles_else())
         return sm
 
 class ConcatMatch(Match):
@@ -2669,7 +2750,7 @@ class CaseNode(Node):
             del self.sub_matches[i]
             self.empty_matches.append(i)
 
-    def _merge(self, ds: Iterable[DFA], treat_as_else: DFState):
+    def _merge(self, ds: Iterable[DFA], error_handling_state: DFState):
         r"""
         Merge the DFAs in the list ds, ensuring that all finishing states are kept as-is.
 
@@ -2689,7 +2770,7 @@ class CaseNode(Node):
         sets into disjoint sets, forming the true "local alphabet". We then use these to generate the transitions on the new DFA state, considering elements of the local alphabet
         which no substates match to form the set of error symbols -- or the "Else" transition, perhaps.
 
-        We also ignore all transitions that go to the entry marked as treat_as_else, as we re-create all the else transitions later.
+        We also ignore all transitions that go to the entry marked as error-handling, as we re-create all the else transitions later.
 
         We start in state (D1,D1_start),(D2,D2_start),...,(Dn,Dn_start)
         """
@@ -2778,7 +2859,7 @@ class CaseNode(Node):
                     potential_transition = sub_state[symbol]
                     if potential_transition is None:
                         continue
-                    if potential_transition.target == treat_as_else:
+                    if potential_transition.error_handling:
                         found_else_transition = True
                         continue
                     else:
@@ -2808,7 +2889,7 @@ class CaseNode(Node):
                 actual_else = set((DFTransition.Else,))
             
             if actual_else: # sometimes you actually don't need one
-                converted_states[processing].transition(DFTransition(list(actual_else)).to(treat_as_else).fallthrough(), allow_replace=True)
+                converted_states[processing].transition(DFTransition(list(actual_else)).to(error_handling_state).fallthrough().handles_else(), allow_replace=True)
 
         return new_dfa, corresponding_finish_states
 
@@ -2879,7 +2960,7 @@ class CaseNode(Node):
                 # Find all transitions that would be pointing to a nomatch...
                 for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
                     # ... and reattach them to the new else state machine
-                    trans.to(sub_dfas[original_backreference[None]].starting_state).attach(*else_actions)
+                    trans.to(sub_dfas[original_backreference[None]].starting_state).attach(*else_actions).handles_else()
                     ProgramData.imbue(trans, DebugTag.NAME, "else action on case node")
                     ProgramData.imbue(trans, DebugTag.PARENT, self)
                 # We have to add that DFA's state to the overall dfa's states array, since it won't get picked up by mergable_ds _UNLESS_ original_backreference contains more than frozenset({None})
@@ -2894,7 +2975,7 @@ class CaseNode(Node):
                 decider_dfa.mark_accepting(new_state)
                 decider_dfa.add(new_state)
                 for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
-                    trans.to(new_state).attach(*else_actions, prepend=True).fallthrough()  # this is an error handler, make sure it's a fallthrough
+                    trans.to(new_state).attach(*else_actions, prepend=True).fallthrough().handles_else()  # this is an error handler, make sure it's a fallthrough
                     # give the transition better debug info
                     ProgramData.imbue(trans, DebugTag.NAME, "else action on case node")
                     ProgramData.imbue(trans, DebugTag.PARENT, self)
@@ -3113,7 +3194,7 @@ class TryExceptNode(ActionSinkNode, ActionSourceNode):
 
         # If there is a next node, append it
         if self.next is not None:
-            sub_dfa.append_after(self.next.convert(current_error_handlers), [current_error_handlers[ErrorReasons.NO_MATCH], self.handler_node], chain_actions=self.after_actions)
+            sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH], chain_actions=self.after_actions)
 
         return sub_dfa
 
