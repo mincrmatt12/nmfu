@@ -4672,8 +4672,8 @@ class CodegenCtx:
 
         return result
 
-    def _transition_will_directly_jump(self, transition: DFTransition):
-        if transition.is_fallthrough:
+    def _transition_will_directly_jump(self, transition: DFTransition, excl_fall=False):
+        if transition.is_fallthrough and not excl_fall:
             return False
         if transition.target in self.dfa.accepting_states and not ProgramData.do(ProgramFlag.STRICT_DONE_TOKEN_GENERATION):
             return False
@@ -4706,7 +4706,7 @@ class CodegenCtx:
         if transition.is_fallthrough:
             if transition.target in self.dfa.states:
                 transition_body.add(f"// fallthrough")
-                if self._transition_will_directly_jump(transition):
+                if self._transition_will_directly_jump(transition, excl_fall=True):
                     transition_body.add(f"goto fall_{self.dfa.states.index(transition.target)};")
                 else:
                     transition_body.add(f"goto repeatswitch;");
@@ -4835,7 +4835,7 @@ class CodegenCtx:
                 # Emit the case label
                 contents.add(f"case {idx}:")
                 # Emit goto target for fallthroughs if anything falls here (these are separate to make it slightly easier to read)
-                if any(x.is_fallthrough for x in self.dfa.transitions_pointing_to(state)):
+                if any(x.is_fallthrough and self._transition_will_directly_jump(x, excl_fall=True) for x in self.dfa.transitions_pointing_to(state)):
                     contents.add(f"fall_{idx}:")
                 # If any transition can directly jump into this case, emit a label for it to do so. We don't really _need_ these checks
                 # but gcc complains about unused labels in -Wall.
