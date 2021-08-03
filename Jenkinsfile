@@ -30,9 +30,13 @@ pipeline {
 					filename 'Dockerfile.build'
 				}
 			}
+			environment {
+				PYTHONPATH="."
+			}
 			steps {
-				sh "pytest --junit-xml=junit.xml || true"
+				sh "pytest --junit-xml=junit.xml --cov=nmfu --cov-report=xml || true"
 				junit 'junit.xml'
+				publishCoverage adapters: [coberturaAdapter('coverage.xml')], sourceFileResolver: sourceFiles('STORE_LAST_BUILD')
 			}
 		}
 		stage('Deploy/Package') {

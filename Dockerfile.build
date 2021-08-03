@@ -5,4 +5,4 @@ RUN pip install twine
 WORKDIR /data
 COPY . /data
 
-RUN pip install .[tests]
+RUN pip install .[tests,coverage] && pip uninstall -y nmfu
