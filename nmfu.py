@@ -549,7 +549,8 @@ class DFA:
                     position = transition.target
                     for action in transition.actions:
                         if action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_OTHER:
-                            position = action.get_target_override_target()
+                            potential = action.get_target_override_targets() # TODO: handle correctly
+                            position = potential[0]
                         elif action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_UNDEFINED:
                             return action
                     if not transition.is_fallthrough:
@@ -593,11 +594,13 @@ class DFA:
                 for action in t.actions:
                     if action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_OTHER:
                         use_real = False
-                        aux(action.get_target_override_target())
+                        for tgt in action.get_target_override_targets():
+                            aux(tgt)
                     elif action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_UNDEFINED:
                         use_real = False
                     elif action.get_target_override_mode() == ActionOverrideMode.MAY_GOTO_TARGET:
-                        aux(action.get_target_override_target())
+                        for tgt in action.get_target_override_targets():
+                            aux(tgt)
                     else:
                         continue
                     break
@@ -697,8 +700,7 @@ class DFA:
                 fake_start[valid].fallthrough(True)
                 fake_start[to_else].fallthrough(True).handles_else()
             else:
-                # Otherwise, just add a generic catch-all else
-                fake_start[DFTransition.Else] = chained_dfa.starting_state
+                raise IllegalDFAStateError("Conditional block with no DFA cannot be appended", chained_dfa)
             chained_dfa.starting_state = fake_start
 
         # Check for ambiguity: if any transitions added to a sub_state try to redirect a valid character a different valid
@@ -803,7 +805,7 @@ class DFA:
                 for action in actions:
                     if action.is_timing_strict() and any(not x.error_handling for x in finish.transitions):
                         # Complain early
-                        raise IllegalDFAStateConflictsError("Unable to schedule finish actions only once", trans, action)
+                        raise UnableToScheduleActionError([incoming], [action])
                     else:
                         trans.attach(action)
 
@@ -816,6 +818,9 @@ class DebugTag(enum.Enum):
     SOURCE_LINE = 1
     SOURCE_COLUMN = 2
     PARENT = 3
+
+    # Specific to actions
+    STRICT_TIMING_REASON = 20
 
 class ProgramFlag(int, enum.Enum):
     def __new__(cls, value, helpstr="", default=False, implies=(), exclusive_with=()):
@@ -935,7 +940,7 @@ class ProgramData:
         return obj
 
     @classmethod
-    def lookup(cls, obj: object, tag: DebugTag, recurse_upwards=True):
+    def lookup(cls, obj: object, tag: DebugTag, recurse_upwards=True, default=None):
         """
         Find the imbued object's data, or -- if none exists -- find it's parents
         """
@@ -946,7 +951,7 @@ class ProgramData:
             elif tag == DebugTag.SOURCE_COLUMN:
                 return obj.column
             else:
-                return None
+                return default
 
         id_obj = id(obj) if type(obj) is not int else obj
 
@@ -964,7 +969,7 @@ class ProgramData:
                     val = cls.lookup(i, tag, recurse_upwards=False)
                     if val is not None:
                         return val
-            return None
+            return default
         return ProgramData._collection[id_obj][tag]
 
     @classmethod
@@ -1081,7 +1086,9 @@ class ProgramData:
                         raise RuntimeError("Program filename specified multiple times")
                     input_filename = option
                     program_output_name = os.path.splitext(os.path.basename(input_filename))[0]
-                    program_output_name = "".join(x if x in string.ascii_letters or x == ' ' else '_' for x in program_output_name)
+                    program_output_name = "".join(x if (
+                        x in string.ascii_letters or x == '_' or (i > 0 and x in string.digits)
+                    ) else '_' for i, x in enumerate(program_output_name))
                     continue
                 elif option[1] == "-":
                     option_name = option[2:]
@@ -1242,9 +1249,13 @@ class NMFUError(Exception):
                 marker += " "
         return marker
 
-    def _get_message(self, show_potential_reasons=True, reasons_header="Potential reasons include:"):
+    def _get_message(self, show_potential_reasons=True, reasons_header="Potential reasons include:", subset=None, additional_info=None):
+        if subset is None:
+            subset = self.reasons
+        if additional_info is None:
+            additional_info = lambda reason: None 
         info_strs = []
-        for reason in self.reasons:
+        for reason in subset:
             name, line, column = (ProgramData.lookup(reason, tag) for tag in (DebugTag.NAME, DebugTag.SOURCE_LINE, DebugTag.SOURCE_COLUMN))
             info_str = ""
             if name:
@@ -1262,6 +1273,8 @@ class NMFUError(Exception):
                         info_str += "\n" + NMFUError._generate_whitespace_marker(line, column)
                 else:
                     continue
+            if additional_info(reason):
+                info_str += "\n  {}".format(additional_info(reason))
             info_strs.append(info_str)
 
         if info_strs:
@@ -1303,6 +1316,20 @@ class IllegalDFAStateConflictsError(NMFUError):
     def __str__(self):
         return self.msg + "\n" + self._get_message(reasons_header="Due to:")
 
+class UnableToScheduleActionError(NMFUError):
+    def __init__(self, states, actions):
+        self.states = list(states)
+        self.actions = list(actions)
+        super().__init__([*self.states, *self.actions])
+    
+    def __str__(self):
+        def add_info(act):
+            rsn = ProgramData.lookup(act, DebugTag.STRICT_TIMING_REASON)
+            if rsn:
+                return f"(strict timing because {rsn})"
+            return None
+        return f"Unable to schedule finish actions only once on\n{self._get_message(show_potential_reasons=False, subset=self.states)}\nfor\n{self._get_message(show_potential_reasons=False, subset=self.actions, additional_info=add_info)}"
+
 class UndefinedReferenceError(NMFUError):
     def __init__(self, objtype, source: lark.Token):
         super().__init__([source])
@@ -1334,9 +1361,10 @@ class ActionMode(enum.Enum):
 
 class ActionOverrideMode(enum.Enum):
     NONE = 0 # action does not override next state
-    MAY_GOTO_TARGET = 1 # action may goto a different state
+    MAY_GOTO_TARGET = 4 # action may goto a different state
+    MAY_GOTO_UNDEFINED = 3 # action may goto an undefined state (like the finish action)
     ALWAYS_GOTO_OTHER = 2 # action will always go to a defined state
-    ALWAYS_GOTO_UNDEFINED = 3 # action will always go to an undefined state (usually something like the global "PREMATURE_EXIT" state or whatever)
+    ALWAYS_GOTO_UNDEFINED = 1 # action will always go to an undefined state (usually something like the global "PREMATURE_EXIT" state or whatever)
 
 class ErrorReasons(enum.Enum):
     NO_MATCH = "nomatch"
@@ -1369,8 +1397,73 @@ class Action:
     def get_target_override_mode(self) -> ActionOverrideMode:
         return ActionOverrideMode.NONE
 
-    def get_target_override_target(self):
-        return None
+    def get_target_override_targets(self) -> List[DFState]:
+        return []
+
+    def modifies(self) -> List["OutputStorage"]:
+        """
+        Return which outputs are modified by executing this action
+        """
+
+        return []
+
+class ConditionalAction(Action):
+    """
+    Implements an entire if-else node chain
+    """
+
+    def __init__(self, conditions: List["DFCondition"], actions: Dict["DFCondition", List[Action]]):
+        self.conditions = conditions
+        self.sub_actions = actions
+
+        for cond, acts in actions.items():
+            ProgramData.imbue(cond, DebugTag.PARENT, self)
+            for act in acts:
+                ProgramData.imbue(act, DebugTag.PARENT, cond)
+
+    def get_mode(self):
+        mode = None
+        for act in itertools.chain(*self.sub_actions.values()):
+            if mode is None:
+                mode = act.get_mode()
+            elif mode != act.get_mode():
+                raise IllegalASTStateError("Action-only conditional node must be of only one type", act)
+        return mode
+
+    def is_timing_strict(self):
+        # If the contained action could change something with the condition, this must be true
+        for cond in self.conditions:
+            if isinstance(cond, IntegerCondition):
+                for act in self.sub_actions[cond]:
+                    for potential in act.modifies():
+                        for child in cond.expr.all_children():
+                            if isinstance(child, OutIntegerExpr) and child.ref == potential:
+                                ProgramData.imbue(self, DebugTag.STRICT_TIMING_REASON, f"expression could change containing conditional outcome")
+                                return True
+        return any(x.is_timing_strict() for x in itertools.chain(*self.sub_actions.values()))
+
+    def get_target_override_targets(self):
+        tgts = set()
+
+        for act in itertools.chain(*self.sub_actions.values()):
+            tgts.update(act.get_target_override_targets())
+
+        return list(tgts)
+
+    def get_target_override_mode(self):
+        mode = ActionOverrideMode.NONE
+        for act in itertools.chain(*self.sub_actions.values()):
+            submode = act.get_target_override_mode()
+
+            if submode == ActionOverrideMode.ALWAYS_GOTO_UNDEFINED:
+                submode = ActionOverrideMode.MAY_GOTO_UNDEFINED
+            elif submode == ActionOverrideMode.ALWAYS_GOTO_OTHER:
+                submode = ActionOverrideMode.MAY_GOTO_TARGET
+
+            if submode.value > mode.value:
+                mode = submode
+
+        return mode
 
 class FinishAction(Action, HasDefaultDebugInfo):
     def get_mode(self):
@@ -1425,12 +1518,18 @@ class AppendTo(Action, HasDefaultDebugInfo):
     def get_target_override_mode(self):
         return ActionOverrideMode.MAY_GOTO_TARGET
 
-    def get_target_override_target(self):
-        return self.end_target
+    def is_timing_strict(self):
+        return True
+
+    def get_target_override_targets(self):
+        return [self.end_target]
 
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
             return "append action ({})".format(ProgramData.lookup(self.into_storage, DebugTag.NAME))
+
+    def modifies(self):
+        return [self.into_storage]
 
 class AppendCharTo(Action, HasDefaultDebugInfo):
     def __init__(self, end_target, append_value: "IntegerExpr", into_storage: "OutputStorage"):
@@ -1444,8 +1543,8 @@ class AppendCharTo(Action, HasDefaultDebugInfo):
     def get_target_override_mode(self):
         return ActionOverrideMode.MAY_GOTO_TARGET
 
-    def get_target_override_target(self):
-        return self.end_target
+    def get_target_override_targets(self):
+        return [self.end_target]
 
     def is_timing_strict(self):
         return True
@@ -1453,6 +1552,9 @@ class AppendCharTo(Action, HasDefaultDebugInfo):
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
             return "append character action ({})".format(ProgramData.lookup(self.into_storage, DebugTag.NAME))
+
+    def modifies(self):
+        return [self.into_storage]
 
 class SetTo(Action, HasDefaultDebugInfo):
     def __init__(self, value_expr: "IntegerExpr", into_storage: "OutputStorage"):
@@ -1464,7 +1566,7 @@ class SetTo(Action, HasDefaultDebugInfo):
         return ActionMode.AT_FINISH
 
     def is_timing_strict(self):
-        return True  # TODO: make this check if the expr references the into_storage
+        return any(isinstance(x, OutIntegerExpr) and x.ref == self.into_storage for x in self.value_expr.all_children())
 
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
@@ -1472,6 +1574,11 @@ class SetTo(Action, HasDefaultDebugInfo):
                 return "set into {} {}".format(ProgramData.lookup(self.into_storage, DebugTag.NAME), self.value_expr.get_literal_result())
             else:
                 return "set into {}".format(ProgramData.lookup(self.into_storage, DebugTag.NAME))
+        elif tag == DebugTag.STRICT_TIMING_REASON:
+            return "expression depends on previous stored value"
+
+    def modifies(self):
+        return [self.into_storage]
 
 class SetToStr(Action, HasDefaultDebugInfo):
     def __init__(self, value_expr: str, into_storage: "OutputStorage"):
@@ -1486,6 +1593,9 @@ class SetToStr(Action, HasDefaultDebugInfo):
     def debug_lookup(self, tag: DebugTag):
         if tag == DebugTag.NAME:
             return "set into {} {!r}".format(ProgramData.lookup(self.into_storage, DebugTag.NAME), self.value_expr)
+
+    def modifies(self):
+        return [self.into_storage]
 
 
 class Node(abc.ABC):
@@ -1534,6 +1644,8 @@ class ActionNode(Node, ActionSourceNode):
 
     def __init__(self, *actions):
         self.actions = list(actions)
+        for act in self.actions:
+            ProgramData.imbue(act, DebugTag.PARENT, self)
         self.next = None
 
     def set_next(self, next_node):
@@ -1598,10 +1710,10 @@ class Match(abc.ABC):
         return None
 
     def attach(self, action: Action):
-        ProgramData.imbue(action, DebugTag.PARENT, self)
         if action.get_mode() == ActionMode.AT_FINISH:
             self.finish_actions.append(action)
         elif action.get_mode() == ActionMode.EACH_CHARACTER:
+            ProgramData.imbue(action, DebugTag.PARENT, self)
             self.char_actions.append(action)
         else:
             self.start_actions.append(action)
@@ -1749,6 +1861,22 @@ class IntegerExpr(abc.ABC):
         """
         return []
 
+    def get_child_expressions(self):
+        """
+        Return an interable of all the children expressions contained within this expression
+        """
+        return []
+
+    def all_children(self):
+        """
+        Recursively find child expressions
+        """
+
+        children = [self]
+        for i in self.get_child_expressions():
+            children.extend(i.all_children())
+        return children
+
 class LiteralIntegerExpr(IntegerExpr):
     def __init__(self, value, typ: OutputStorageType = OutputStorageType.INT, model_ref: OutputStorage=None):
         self.value = value
@@ -1840,6 +1968,9 @@ class MathIntegerExpr(IntegerExpr):
 
     def __eq__(self, other):
         return type(other) == type(self) and self.children == other.children
+
+    def get_child_expressions(self):
+        return self.children
 
 class SumIntegerExpr(MathIntegerExpr):
     def __init__(self, children: List[IntegerExpr], negate: List[bool]):
@@ -2651,8 +2782,7 @@ class RegexMatch(Match):
         # Check if it's possible to schedule the finish actions. TODO: instead of throwing an error, attempt to move them to the next thing's start
         if any(x.is_timing_strict() for x in self.finish_actions) and any(x.transitions for x in self.dfa_2.finishing_states):
             # Complain early
-            raise IllegalDFAStateConflictsError("Unable to schedule finish actions only once", *(x for x in self.dfa_2.finishing_states if x.transitions), 
-                    *(x for x in self.finish_actions if x.is_timing_strict()))
+            raise UnableToScheduleActionError((x for x in self.dfa_2.finishing_states if x.transitions), (x for x in self.finish_actions if x.is_timing_strict()))
 
         # Create a normal SM
         out_dfa = DFA()
@@ -3019,7 +3149,7 @@ class CaseNode(Node):
                     # Handle empty matches
                     all_transitions_empty = set().union(*(decider_dfa.transitions_pointing_to(x) for x in corresponding_finish_states[i]))
                     if len(all_transitions_empty) != 1 and any(x.is_timing_strict() for x in self.case_match_actions[true_backref]):
-                        raise IllegalDFAStateError("Unable to schedule strict finish action for case", i)
+                        raise UnableToScheduleActionError([i], [x for x in self.case_match_actions[true_backref] if x.is_timing_strict()])
                     # Add actions
                     for j in all_transitions_empty:
                         j.attach(*self.case_match_actions[true_backref], prepend=True)
@@ -3281,7 +3411,7 @@ class ForeachNode(ActionSinkNode, ActionSourceNode):
 
         return sub_dfa
 
-class IfElseNode(ActionSinkNode):
+class IfElseNode(ActionSinkNode, ActionSourceNode):
     def __init__(self, branches: List[DFCondition], branch_bodies: Dict[DFCondition, Node]):
         self.branches = branches 
         self.branch_bodies = branch_bodies
@@ -3290,6 +3420,9 @@ class IfElseNode(ActionSinkNode):
         self.after_actions = []
         self.next = None
 
+        # If nonempty, we replace the if-node with a set of ConditionalActions
+        self.equivalent_actions = []
+
         # Adopt all branch actions
         for condition in self.branches:
             if isinstance(self.branch_bodies[condition], ActionSourceNode):
@@ -3297,11 +3430,21 @@ class IfElseNode(ActionSinkNode):
             else:
                 self.branch_actions[condition] = []
 
+        # Check if we can replace with an action-only node
+        if all(x is None for x in self.branch_bodies.values()):
+            self.equivalent_actions = [ConditionalAction(self.branches, self.branch_actions)]
+
     def _set_next(self, next_node):
         self.next = next_node
 
     def get_next(self):
         return self.next
+
+    def adopt_actions_from(self):
+        if self.equivalent_actions:
+            return tuple(self.equivalent_actions), self.next
+        else:
+            return (), self
 
     def _adopt_actions(self, actions):
         if any(x.get_mode() != ActionMode.AT_FINISH for x in actions):
@@ -3784,7 +3927,7 @@ class ParseCtx:
             ProgramData.imbue(act, DebugTag.SOURCE_COLUMN, stmt.column)
             return ActionNode(act)
         elif stmt.data in ("assign_stmt", "append_stmt"):
-            return self._parse_assign_stmt(stmt, stmt.data == "append_stmt")
+            return ProgramData.imbue(self._parse_assign_stmt(stmt, stmt.data == "append_stmt"), DebugTag.SOURCE_LINE, stmt.line, DebugTag.SOURCE_COLUMN, stmt.column)
         elif stmt.data == "case_stmt":
             # Find all of the matches
             return ProgramData.imbue(ProgramData.imbue(CaseNode({k: v for k, v in (self._parse_case_clause(x) for x in stmt.children)}), 
@@ -3952,7 +4095,7 @@ class DfaCompileCtx:
         for state in self.dfa.states:
             for transition in state.transitions:
                 if transition.target == state and transition.is_fallthrough and not any(x.get_target_override_mode() in [
-                    ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.ALWAYS_GOTO_UNDEFINED] and x.get_target_override_target() != state for x in transition.actions):
+                    ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.ALWAYS_GOTO_UNDEFINED] and state not in x.get_target_override_targets() for x in transition.actions):
                     raise IllegalDFAStateError("Infinite loop due to self-referential fallthrough", transition)
         
 
@@ -4235,7 +4378,7 @@ class CodegenCtx:
                 result += f"({self._generate_code_for_int_expr(child, ctx, out_expr)})"
             return result
         elif isinstance(intexpr, CompareIntegerExpr):
-            return f"({self._generate_code_for_int_expr(intexpr.left, ctx, out_expr)} {intexpr.op.value} {self._generate_code_for_int_expr(intexpr.right, ctx, out_expr)})"
+            return f"({self._generate_code_for_int_expr(intexpr.left, ctx, out_expr)}) {intexpr.op.value} ({self._generate_code_for_int_expr(intexpr.right, ctx, out_expr)})"
         elif isinstance(intexpr, (DisjunctionIntegerExpr, ConjunctionIntegerExpr)):
             result = f"({self._generate_code_for_int_expr(intexpr.children[0], ctx, out_expr)})"
             for child in intexpr.children:
@@ -4315,6 +4458,30 @@ class CodegenCtx:
                 result.add(f"(state->{action.name}_hook)(state, {parm});")
             else:
                 raise IllegalDFAStateError("Attempt to use hook while no hook method is enabled", action)
+        elif isinstance(action, ConditionalAction):
+            generated_if = False
+            for condition in action.conditions:
+                if isinstance(condition, ElseCondition):
+                    if not generated_if:
+                        raise IllegalDFAStateError("Else condition is not last in list", action)
+                    result.add("else {")
+                else:
+                    if generated_if:
+                        cond_name = "else if"
+                    else:
+                        generated_if = True
+                        cond_name = "if"
+
+                    result.add(f"{cond_name} ({self._generate_condition(condition, is_start or is_end)}) {{")
+
+                # Generate condition body like normal
+                with result as body:
+                    for sub_act in action.sub_actions[condition]:
+                        body += self._generate_action_implementation(sub_act, is_start=is_start, is_end=is_end)
+
+                result.add("}")
+        else:
+            raise NotImplementedError(action)
         return result.value()
 
     def _generate_start_implementation(self):
@@ -4732,7 +4899,8 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
             for action in transition.actions:
                 if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.MAY_GOTO_TARGET]:
                     replaced_actions[id(action)] = action
-                    transition_similar_count[(frozenset([id(action)]), action.get_target_override_target())] += 1
+                    for tgt in action.get_target_override_targets():
+                        transition_similar_count[(frozenset([id(action)]), tgt)] += 1
 
     ignored_transitions = []
     if ProgramData.do(ProgramFlag.DEBUG_DFA_HIDE_ERROR_HANDLING):
@@ -4774,9 +4942,12 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
                 acname = ProgramData.lookup(action, DebugTag.NAME, recurse_upwards=False)
                 if acname:
                     label += "\n{}".format(acname)
+                else:
+                    label += f"\n{action!r}"
                 if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.MAY_GOTO_TARGET]:
-                    if (frozenset([id(action)]), action.get_target_override_target()) not in ignored_transitions:
-                        g.edge(str(id(state)), str(id(action.get_target_override_target())), label=f"{acname} side effect")
+                    for tgt in action.get_target_override_targets():
+                        if (frozenset([id(action)]), tgt) not in ignored_transitions:
+                            g.edge(str(id(state)), str(id(tgt)), label=f"{acname} side effect")
                 if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER]:
                     is_real = False
             if is_real:
