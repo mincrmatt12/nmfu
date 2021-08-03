@@ -1,0 +1,7 @@
+out int test;
+
+parser {
+    loop {
+        test = 4;
+    }
+}

@@ -1,0 +1,9 @@
+out int asdf;
+
+parser {
+    "123";
+    optional {
+        /\w+/;
+    }
+    asdf = [asdf + $last];
+}

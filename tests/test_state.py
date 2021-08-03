@@ -66,3 +66,51 @@ def test_dfa_append_after_simple():
 
     target = match1.simulate("abc")
     assert act[0] in target["d"].actions
+
+def test_dfa_transition_accessors():
+    dfa = nmfu.DFA()
+
+    s1 = nmfu.DFState()
+    s2 = nmfu.DFState()
+    s3 = nmfu.DFState()
+
+    s1["a"] = s3
+    s1["a"].handles_else()
+
+    s1["b"] = s2
+    s2["c"] = s2
+
+    ch = nmfu.CallHook("dummy")
+
+    s2["c"].attach(ch)
+
+    dfa.add(s1)
+    dfa.add(s2)
+    dfa.add(s3)
+
+    assert dfa.error_handling_transitions() == {s1["a"]}
+    assert dfa.transitions_that_do(ch) == {s2["c"]}
+    assert dfa.transitions_pointing_to(s2, include_states=True) == {(s1, s1["b"]), (s2, s2["c"])}
+
+def test_dfa_is_valid():
+    dfa = nmfu.DFA()
+
+    s1 = nmfu.DFState()
+    s2 = nmfu.DFState()
+    s3 = nmfu.DFState()
+
+    dfa.add(s1)
+    dfa.add(s2)
+    dfa.add(s3)
+
+    s1["a"] = s2
+    s2["b"] = s3
+
+    dfa.mark_accepting(s3)
+    
+    assert dfa.is_valid()
+
+    del s2["b"]
+
+    assert not dfa.is_valid()
+

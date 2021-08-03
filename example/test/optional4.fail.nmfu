@@ -1,0 +1,6 @@
+parser {
+    optional {
+        /e?/; // empty ambig
+    }
+    "text";
+}

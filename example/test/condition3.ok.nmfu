@@ -1,0 +1,15 @@
+out int value;
+
+parser {
+    /test+f/;
+    if value == 4 {
+        value = 5;
+        "4";
+    }
+    else {
+        value = 6;
+        "5";
+    }
+    value = 7;
+    "7";
+}

@@ -1,0 +1,13 @@
+out int value;
+out enum{A,B,C} test;
+
+parser {
+    /test+f/;
+    if test == B && value != 5 {
+        "4";
+    }
+    elif test == C || test == A {
+        "5";
+    }
+    "@";
+}

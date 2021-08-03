@@ -2000,7 +2000,7 @@ class MathIntegerExpr(IntegerExpr):
             raise IllegalParseTree("Empty math expression", self)
     
         if valid_type is not None:
-            if not all(x.result_type() == OutputStorageType.INT for x in self.children):
+            if not all(x.result_type() == valid_type for x in self.children):
                 raise IllegalParseTree("Invalid arithmetic type", self)
 
     def result_type(self):
@@ -3518,12 +3518,6 @@ class IfElseNode(ActionSinkNode, ActionSourceNode):
 
         self.after_actions.extend(actions)
 
-    def _generate_null_dfa(self):
-        null = DFA()
-        null.add(DFState())
-        null.mark_accepting(null.starting_state)
-        return null
-
     def convert(self, current_error_handlers):
         # Generate condition dfa + start node
         dfa = DFA()
@@ -4447,7 +4441,7 @@ class CodegenCtx:
             return f"({self._generate_code_for_int_expr(intexpr.left, ctx, out_expr)}) {intexpr.op.value} ({self._generate_code_for_int_expr(intexpr.right, ctx, out_expr)})"
         elif isinstance(intexpr, (DisjunctionIntegerExpr, ConjunctionIntegerExpr)):
             result = f"({self._generate_code_for_int_expr(intexpr.children[0], ctx, out_expr)})"
-            for child in intexpr.children:
+            for child in intexpr.children[1:]:
                 result += " "
                 result += "||" if isinstance(intexpr, DisjunctionIntegerExpr) else "&&"
                 result += " "
@@ -4869,19 +4863,11 @@ class CodegenCtx:
         unconditional_end_transition = state[DFTransition.End]
 
         result.add("// possible end transitions")
-        generated_if = False
         
         # Create all transitions for possible conditions
         if unconditional_end_transition:
-            if generated_if:
-                result.add("else {")
-            with result as transition_body:
-                transition_body += self._generate_transition_body(unconditional_end_transition, True)
-            if generated_if:
-                result.add("}")
-        else:
-            if generated_if:
-                result.add("else")
+            result += self._generate_transition_body(unconditional_end_transition, True)
+
         if state in self.dfa.accepting_states:
             result.add(f"return {self.program_name.upper()}_DONE;")
         else:
