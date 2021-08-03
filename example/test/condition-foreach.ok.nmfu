@@ -1,0 +1,14 @@
+out int value;
+
+parser {
+    loop {
+        foreach {
+            /\d+/;
+        } do {
+            if $last < 4 {
+                value = [value + $last];
+            }
+        }
+        "end";
+    }
+}
