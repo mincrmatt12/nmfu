@@ -1,0 +1,14 @@
+out int test;
+
+parser {
+    loop {
+        /asd\w/;
+        if test == 'f' {
+            break;
+        }
+        else {
+            /\n/;
+        }
+    }
+    "a";
+}

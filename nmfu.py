@@ -327,8 +327,8 @@ class DFState:
         if isinstance(transition, DFConditionalTransition):
             raise IllegalDFAStateError("Invalid condition transition on normal state", self)
         # Add parent relationship if this is a new transition
-        if ProgramData.lookup(transition, DebugTag.PARENT) is None:
-            ProgramData.imbue(transition, DebugTag.PARENT, self)
+        if ProgramData.lookup(transition, DTAG.PARENT) is None:
+            ProgramData.imbue(transition, DTAG.PARENT, self)
         if allow_replace_if is None:
             allow_replace_constant = True if allow_replace else False  # don't allow reference binding
             allow_replace = lambda x: allow_replace_constant
@@ -446,16 +446,20 @@ class DFConditionPoint(DFState):
         self.transitions = []
 
     def transition(self, transition):
+        if not isinstance(transition, DFConditionalTransition):
+            raise IllegalDFAStateError("Invalid normal transition on condition point", self)
         if transition in self.transitions:
             return
+        if ProgramData.lookup(transition, DTAG.PARENT) is None: 
+            ProgramData.imbue(transition, DTAG.PARENT, self)
         # TODO: conflicts
         self.transitions.append(transition)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key): # pragma: no-cover
         raise NotImplementedError()
-    def __delitem__(self, key):
+    def __delitem__(self, key): # pragma: no-cover
         raise NotImplementedError()
-    def __setitem__(self, key):
+    def __setitem__(self, key): # pragma: no-cover
         raise NotImplementedError()
 
     def equivalent_on_values(self):
@@ -488,6 +492,11 @@ class DFConditionPoint(DFState):
             if isinstance(state, DFConditionPoint):
                 for t in state.all_transitions():
                     aux(t.target)
+                    # Also consider actions with overrides
+                    for action in t.actions:
+                        if action.get_target_override_mode() in (ActionOverrideMode.MAY_GOTO_TARGET, ActionOverrideMode.ALWAYS_GOTO_OTHER):
+                            for extra in action.get_target_override_targets():
+                                aux(extra)
             else:
                 sources.add(state)
                 for t in state.all_transitions():
@@ -521,8 +530,8 @@ class DFA:
         self.states: List[DFState] = []
 
     def add(self, state):
-        if ProgramData.lookup(state, DebugTag.PARENT) is None:
-            ProgramData.imbue(state, DebugTag.PARENT, self)
+        if ProgramData.lookup(state, DTAG.PARENT) is None:
+            ProgramData.imbue(state, DTAG.PARENT, self)
         if self.starting_state == None:
             self.starting_state = state
         self.states.append(state)
@@ -617,13 +626,12 @@ class DFA:
 
         result = set()
 
-        for state in self.dfs():
-            for t in state.all_transitions():
-                if t.error_handling:
-                    if include_states:
-                        result.add((state, t))
-                    else:
-                        result.add(t)
+        for state, t in self.all_transitions(True):
+            if t.error_handling:
+                if include_states:
+                    result.add((state, t))
+                else:
+                    result.add(t)
 
         return result
 
@@ -636,13 +644,12 @@ class DFA:
 
         result = set()
 
-        for state in self.dfs():
-            for t in state.all_transitions():
-                if t.target == target_state:
-                    if include_states:
-                        result.add((state, t))
-                    else:
-                        result.add(t)
+        for state, t in self.all_transitions(True):
+            if t.target == target_state:
+                if include_states:
+                    result.add((state, t))
+                else:
+                    result.add(t)
 
         return result
 
@@ -654,12 +661,23 @@ class DFA:
 
         result = set()
 
-        for state in self.dfs():
-            for t in state.all_transitions():
-                if action in t.actions:
-                    result.add(t)
+        for t in self.all_transitions():
+            if action in t.actions:
+                result.add(t)
 
         return result
+
+    def all_transitions(self, include_states=False):
+        """
+        Yield all reachable transitions
+        """
+
+        for state in self.dfs():
+            for action in state.all_transitions():
+                if include_states:
+                    yield (state, action)
+                else:
+                    yield action
 
     def is_valid(self):
         """
@@ -813,7 +831,7 @@ class DFA:
 # DEBUG STORAGE
 # =============
 
-class DebugTag(enum.Enum):
+class DTAG(enum.Enum):
     NAME = 0
     SOURCE_LINE = 1
     SOURCE_COLUMN = 2
@@ -821,6 +839,9 @@ class DebugTag(enum.Enum):
 
     # Specific to actions
     STRICT_TIMING_REASON = 20
+
+    # Used for tracking action skips
+    ACTION_MAY_SKIP = 40
 
 class ProgramFlag(int, enum.Enum):
     def __new__(cls, value, helpstr="", default=False, implies=(), exclusive_with=()):
@@ -886,7 +907,7 @@ class ProgramOption(enum.Enum):
     DEBUG_GRAPH_DUMP_FORMAT = ("pdf", "Output format for graphviz dumpers, use 'dot' to get raw dot file")
 
 class HasDefaultDebugInfo:
-    def debug_lookup(self, tag: DebugTag):
+    def debug_lookup(self, tag: DTAG):
         return None
 
 class DebugDumpable(enum.Enum):
@@ -927,12 +948,12 @@ class ProgramData:
         cls._current_source = src.splitlines(keepends=False)
 
     @classmethod
-    def imbue(cls, obj: object, tag: DebugTag, value: object, *extra_tags):
+    def imbue(cls, obj: object, tag: DTAG, value: object, *extra_tags):
         """
         Imbue this object with this debug information
         """
 
-        if tag == DebugTag.PARENT:
+        if tag == DTAG.PARENT:
             ProgramData._children[id(value.__repr__.__self__)].append(obj)
         ProgramData._collection[id(obj)][tag] = value
         if extra_tags:
@@ -940,15 +961,15 @@ class ProgramData:
         return obj
 
     @classmethod
-    def lookup(cls, obj: object, tag: DebugTag, recurse_upwards=True, default=None):
+    def lookup(cls, obj: object, tag: DTAG, recurse_upwards=True, default=None):
         """
         Find the imbued object's data, or -- if none exists -- find it's parents
         """
 
         if type(obj) in (lark.Token, lark.Tree):
-            if tag == DebugTag.SOURCE_LINE:
+            if tag == DTAG.SOURCE_LINE:
                 return obj.line
-            elif tag == DebugTag.SOURCE_COLUMN:
+            elif tag == DTAG.SOURCE_COLUMN:
                 return obj.column
             else:
                 return default
@@ -956,15 +977,15 @@ class ProgramData:
         id_obj = id(obj) if type(obj) is not int else obj
 
         if tag not in ProgramData._collection[id_obj]:
-            if DebugTag.PARENT in ProgramData._collection[id_obj] and recurse_upwards:
-                val = cls.lookup(ProgramData._collection[id_obj][DebugTag.PARENT], tag)
+            if DTAG.PARENT in ProgramData._collection[id_obj] and recurse_upwards:
+                val = cls.lookup(ProgramData._collection[id_obj][DTAG.PARENT], tag)
                 if val is not None:
                     return val
             if isinstance(obj, HasDefaultDebugInfo):
                 val = obj.debug_lookup(tag)
                 if val is not None:
                     return val
-            if tag in (DebugTag.SOURCE_COLUMN, DebugTag.SOURCE_LINE):
+            if tag in (DTAG.SOURCE_COLUMN, DTAG.SOURCE_LINE):
                 for i in cls._children[id_obj]:
                     val = cls.lookup(i, tag, recurse_upwards=False)
                     if val is not None:
@@ -1256,7 +1277,7 @@ class NMFUError(Exception):
             additional_info = lambda reason: None 
         info_strs = []
         for reason in subset:
-            name, line, column = (ProgramData.lookup(reason, tag) for tag in (DebugTag.NAME, DebugTag.SOURCE_LINE, DebugTag.SOURCE_COLUMN))
+            name, line, column = (ProgramData.lookup(reason, tag) for tag in (DTAG.NAME, DTAG.SOURCE_LINE, DTAG.SOURCE_COLUMN))
             info_str = ""
             if name:
                 info_str += f"- {name}:"
@@ -1324,7 +1345,7 @@ class UnableToScheduleActionError(NMFUError):
     
     def __str__(self):
         def add_info(act):
-            rsn = ProgramData.lookup(act, DebugTag.STRICT_TIMING_REASON)
+            rsn = ProgramData.lookup(act, DTAG.STRICT_TIMING_REASON)
             if rsn:
                 return f"(strict timing because {rsn})"
             return None
@@ -1407,6 +1428,26 @@ class Action:
 
         return []
 
+    def embeddable(self):
+        """
+        Returns false if this action should not be wrapped in another action, like ConditionalAction
+        """
+
+        return True
+
+    def embeds(self) -> List["Action"]:
+        """
+        Returns list of child embedded actions
+        """
+
+        return []
+
+    def all_subactions(self):
+        children = [self]
+        for i in self.embeds():
+            children.extend(i.all_subactions())
+        return children
+
 class ConditionalAction(Action):
     """
     Implements an entire if-else node chain
@@ -1417,9 +1458,9 @@ class ConditionalAction(Action):
         self.sub_actions = actions
 
         for cond, acts in actions.items():
-            ProgramData.imbue(cond, DebugTag.PARENT, self)
+            ProgramData.imbue(cond, DTAG.PARENT, self)
             for act in acts:
-                ProgramData.imbue(act, DebugTag.PARENT, cond)
+                ProgramData.imbue(act, DTAG.PARENT, cond)
 
     def get_mode(self):
         mode = None
@@ -1438,7 +1479,7 @@ class ConditionalAction(Action):
                     for potential in act.modifies():
                         for child in cond.expr.all_children():
                             if isinstance(child, OutIntegerExpr) and child.ref == potential:
-                                ProgramData.imbue(self, DebugTag.STRICT_TIMING_REASON, f"expression could change containing conditional outcome")
+                                ProgramData.imbue(self, DTAG.STRICT_TIMING_REASON, f"expression could change containing conditional outcome")
                                 return True
         return any(x.is_timing_strict() for x in itertools.chain(*self.sub_actions.values()))
 
@@ -1449,6 +1490,9 @@ class ConditionalAction(Action):
             tgts.update(act.get_target_override_targets())
 
         return list(tgts)
+
+    def embeds(self):
+        return list(itertools.chain(*self.sub_actions.values()))
 
     def get_target_override_mode(self):
         mode = ActionOverrideMode.NONE
@@ -1475,8 +1519,8 @@ class FinishAction(Action, HasDefaultDebugInfo):
     def get_target_override_mode(self):
         return ActionOverrideMode.ALWAYS_GOTO_UNDEFINED
 
-    def debug_lookup(self, tag: DebugTag):
-        if tag == DebugTag.NAME:
+    def debug_lookup(self, tag: DTAG):
+        if tag == DTAG.NAME:
             return "exit action"
 
 class CallHook(Action, HasDefaultDebugInfo):
@@ -1489,13 +1533,13 @@ class CallHook(Action, HasDefaultDebugInfo):
     def is_timing_strict(self):
         return True
 
-    def debug_lookup(self, tag: DebugTag):
-        if tag == DebugTag.NAME:
+    def debug_lookup(self, tag: DTAG):
+        if tag == DTAG.NAME:
             return f"call to hook {self.name}"
 
 class BreakAction(Action, HasDefaultDebugInfo):
     def __init__(self, refers_to):
-        self.refers_to = refers_to
+        self.refers_to: "LoopNode" = refers_to
 
     def get_mode(self):
         return ActionMode.AT_FINISH
@@ -1503,12 +1547,18 @@ class BreakAction(Action, HasDefaultDebugInfo):
     def is_timing_strict(self):
         return True
 
-    def get_target_override_mode(self):
-        return ActionOverrideMode.ALWAYS_GOTO_UNDEFINED
+    def get_target_override_targets(self):
+        return [self.refers_to.end_state]
 
-    def debug_lookup(self, tag: DebugTag):
-        if tag == DebugTag.NAME:
-            return "break action for {}".format(ProgramData.lookup(self.refers_to, DebugTag.NAME))
+    def get_target_override_mode(self):
+        return ActionOverrideMode.ALWAYS_GOTO_OTHER
+
+    def debug_lookup(self, tag: DTAG):
+        if tag == DTAG.NAME:
+            return "break action for {}".format(ProgramData.lookup(self.refers_to, DTAG.NAME))
+
+    def replacement_actions(self):
+        return self.refers_to.after_break_actions
 
 class AppendTo(Action, HasDefaultDebugInfo):
     def __init__(self, end_target, into_storage: "OutputStorage"):
@@ -1524,9 +1574,9 @@ class AppendTo(Action, HasDefaultDebugInfo):
     def get_target_override_targets(self):
         return [self.end_target]
 
-    def debug_lookup(self, tag: DebugTag):
-        if tag == DebugTag.NAME:
-            return "append action ({})".format(ProgramData.lookup(self.into_storage, DebugTag.NAME))
+    def debug_lookup(self, tag: DTAG):
+        if tag == DTAG.NAME:
+            return "append action ({})".format(ProgramData.lookup(self.into_storage, DTAG.NAME))
 
     def modifies(self):
         return [self.into_storage]
@@ -1549,9 +1599,9 @@ class AppendCharTo(Action, HasDefaultDebugInfo):
     def is_timing_strict(self):
         return True
 
-    def debug_lookup(self, tag: DebugTag):
-        if tag == DebugTag.NAME:
-            return "append character action ({})".format(ProgramData.lookup(self.into_storage, DebugTag.NAME))
+    def debug_lookup(self, tag: DTAG):
+        if tag == DTAG.NAME:
+            return "append character action ({})".format(ProgramData.lookup(self.into_storage, DTAG.NAME))
 
     def modifies(self):
         return [self.into_storage]
@@ -1560,7 +1610,7 @@ class SetTo(Action, HasDefaultDebugInfo):
     def __init__(self, value_expr: "IntegerExpr", into_storage: "OutputStorage"):
         self.into_storage = into_storage
         self.value_expr = value_expr
-        ProgramData.imbue(value_expr, DebugTag.PARENT, self)
+        ProgramData.imbue(value_expr, DTAG.PARENT, self)
 
     def get_mode(self):
         return ActionMode.AT_FINISH
@@ -1568,13 +1618,13 @@ class SetTo(Action, HasDefaultDebugInfo):
     def is_timing_strict(self):
         return any(isinstance(x, OutIntegerExpr) and x.ref == self.into_storage for x in self.value_expr.all_children())
 
-    def debug_lookup(self, tag: DebugTag):
-        if tag == DebugTag.NAME:
+    def debug_lookup(self, tag: DTAG):
+        if tag == DTAG.NAME:
             if self.value_expr.is_literal():
-                return "set into {} {}".format(ProgramData.lookup(self.into_storage, DebugTag.NAME), self.value_expr.get_literal_result())
+                return "set into {} {}".format(ProgramData.lookup(self.into_storage, DTAG.NAME), self.value_expr.get_literal_result())
             else:
-                return "set into {}".format(ProgramData.lookup(self.into_storage, DebugTag.NAME))
-        elif tag == DebugTag.STRICT_TIMING_REASON:
+                return "set into {}".format(ProgramData.lookup(self.into_storage, DTAG.NAME))
+        elif tag == DTAG.STRICT_TIMING_REASON:
             return "expression depends on previous stored value"
 
     def modifies(self):
@@ -1590,9 +1640,9 @@ class SetToStr(Action, HasDefaultDebugInfo):
     def get_mode(self):
         return ActionMode.AT_FINISH
 
-    def debug_lookup(self, tag: DebugTag):
-        if tag == DebugTag.NAME:
-            return "set into {} {!r}".format(ProgramData.lookup(self.into_storage, DebugTag.NAME), self.value_expr)
+    def debug_lookup(self, tag: DTAG):
+        if tag == DTAG.NAME:
+            return "set into {} {!r}".format(ProgramData.lookup(self.into_storage, DTAG.NAME), self.value_expr)
 
     def modifies(self):
         return [self.into_storage]
@@ -1645,7 +1695,7 @@ class ActionNode(Node, ActionSourceNode):
     def __init__(self, *actions):
         self.actions = list(actions)
         for act in self.actions:
-            ProgramData.imbue(act, DebugTag.PARENT, self)
+            ProgramData.imbue(act, DTAG.PARENT, self)
         self.next = None
 
     def set_next(self, next_node):
@@ -1713,7 +1763,7 @@ class Match(abc.ABC):
         if action.get_mode() == ActionMode.AT_FINISH:
             self.finish_actions.append(action)
         elif action.get_mode() == ActionMode.EACH_CHARACTER:
-            ProgramData.imbue(action, DebugTag.PARENT, self)
+            ProgramData.imbue(action, DTAG.PARENT, self)
             self.char_actions.append(action)
         else:
             self.start_actions.append(action)
@@ -1724,13 +1774,13 @@ class DirectMatch(Match, HasDefaultDebugInfo):
         super().__init__()
         self.match_contents = match_contents
 
-    def debug_lookup(self, tag: DebugTag):
-        if tag == DebugTag.NAME:
+    def debug_lookup(self, tag: DTAG):
+        if tag == DTAG.NAME:
             return f"direct match {self.match_contents!r}"
 
     def convert(self, current_error_handlers: dict):
         sm = DFA() # Create a new SM
-        ProgramData.imbue(sm, DebugTag.PARENT, self) # Mark us as the parent of this SM
+        ProgramData.imbue(sm, DTAG.PARENT, self) # Mark us as the parent of this SM
         state = DFState()
         sm.add(state)
         """
@@ -1761,8 +1811,8 @@ class CaseDirectMatch(Match, HasDefaultDebugInfo):
         super().__init__()
         self.match_contents = match_contents
 
-    def debug_lookup(self, tag: DebugTag):
-        if tag == DebugTag.NAME:
+    def debug_lookup(self, tag: DTAG):
+        if tag == DTAG.NAME:
             return f"casei match {self.match_contents!r}"
 
     def _create_casei_from(self, character: str):
@@ -1774,7 +1824,7 @@ class CaseDirectMatch(Match, HasDefaultDebugInfo):
 
     def convert(self, current_error_handlers: dict):
         sm = DFA() # Create a new SM
-        ProgramData.imbue(sm, DebugTag.PARENT, self) # Mark us as the parent of this SM
+        ProgramData.imbue(sm, DTAG.PARENT, self) # Mark us as the parent of this SM
         state = DFState()
         sm.add(state)
         """
@@ -1817,7 +1867,7 @@ class OutputStorage(HasDefaultDebugInfo):
         return self.type == typ
 
     def debug_lookup(self, tag):
-        if tag == DebugTag.NAME:
+        if tag == DTAG.NAME:
             return f"output '{self.name}'"
 
     def __repr__(self):
@@ -1833,6 +1883,8 @@ class IntegerExprUseContext(enum.Enum):
     ASSIGN_ON_END = 2
     CONDITION_PREDICATE = 3
     CONDITION_PREDICATE_END = 4
+    CONDITION_PREDICATE_ACTION = 5
+    CONDITION_PREDICATE_ACTION_END = 6
 
 class IntegerExpr(abc.ABC):
     @abc.abstractmethod
@@ -1915,7 +1967,7 @@ class StringRefIntegerExpr(IntegerExpr):
         if not index.result_type() == OutputStorageType.INT:
             raise IllegalParseTree("Index expression must be an integer", index)
 
-        ProgramData.imbue(index, DebugTag.PARENT, self)
+        ProgramData.imbue(index, DTAG.PARENT, self)
 
         self.ref = ref
         self.index = index
@@ -1932,7 +1984,7 @@ class LastCharIntegerExpr(IntegerExpr):
         return OutputStorageType.INT
 
     def get_invalid_contexts(self):
-        return [IntegerExprUseContext.ASSIGN_INITIAL, IntegerExprUseContext.ASSIGN_ON_END, IntegerExprUseContext.CONDITION_PREDICATE_END]
+        return [IntegerExprUseContext.ASSIGN_INITIAL, IntegerExprUseContext.ASSIGN_ON_END, IntegerExprUseContext.CONDITION_PREDICATE_END, IntegerExprUseContext.CONDITION_PREDICATE, IntegerExprUseContext.CONDITION_PREDICATE_ACTION_END]
 
     def __eq__(self, other):
         return isinstance(other, LastCharIntegerExpr)
@@ -1942,7 +1994,7 @@ class MathIntegerExpr(IntegerExpr):
         self.children = children
         
         for child in self.children:
-            ProgramData.imbue(child, DebugTag.PARENT, self)
+            ProgramData.imbue(child, DTAG.PARENT, self)
 
         if not self.children:
             raise IllegalParseTree("Empty math expression", self)
@@ -2121,7 +2173,7 @@ class ElseCondition(ConstantCondition, HasDefaultDebugInfo):
         super().__init__(True)
 
     def debug_lookup(self, tag):
-        if tag == DebugTag.NAME:
+        if tag == DTAG.NAME:
             return "else"
         return None
 
@@ -2133,7 +2185,7 @@ class IntegerCondition(DFCondition, HasDefaultDebugInfo):
             else:
                 raise IllegalParseTree("Condition must be convertable to bool", expr)
 
-        if IntegerExprUseContext.CONDITION_PREDICATE in expr.get_invalid_contexts():
+        if IntegerExprUseContext.CONDITION_PREDICATE in expr.get_invalid_contexts() and IntegerExprUseContext.CONDITION_PREDICATE_ACTION in expr.get_invalid_contexts():
             raise IllegalParseTree("Expression not valid for use as a predicate", expr)
 
         self.expr = expr
@@ -2142,7 +2194,7 @@ class IntegerCondition(DFCondition, HasDefaultDebugInfo):
     def get_literal_result(self): return self.expr.get_literal_result()
 
     def debug_lookup(self, tag):
-        if tag == DebugTag.NAME:
+        if tag == DTAG.NAME:
             return "if condition"
         return None
 
@@ -2237,25 +2289,25 @@ class InvertedRegexCharClass(RegexCharClass):
 
 class RegexKleene:
     def __init__(self, sub_match):
-        ProgramData.imbue(sub_match, DebugTag.PARENT, self)
+        ProgramData.imbue(sub_match, DTAG.PARENT, self)
         self.sub_match = sub_match
 
 class RegexOptional:
     def __init__(self, sub_match):
-        ProgramData.imbue(sub_match, DebugTag.PARENT, self)
+        ProgramData.imbue(sub_match, DTAG.PARENT, self)
         self.sub_match = sub_match
 
 class RegexAlternation:
     def __init__(self, sub_matches):
         self.sub_matches = set(sub_matches)
         for sub_match in self.sub_matches:
-            ProgramData.imbue(sub_match, DebugTag.PARENT, self)
+            ProgramData.imbue(sub_match, DTAG.PARENT, self)
 
 class RegexSequence:
     def __init__(self, sub_matches):
         self.sub_matches = list(sub_matches)
         for sub_match in self.sub_matches:
-            ProgramData.imbue(sub_match, DebugTag.PARENT, self)
+            ProgramData.imbue(sub_match, DTAG.PARENT, self)
 
 class RegexNFState:
     Epsilon = object()
@@ -2333,7 +2385,7 @@ class RegexNFA:
         if finishing_idx in start_dfa_state:
             target_dfa.mark_finishing(visited_states[start_dfa_state])
         to_process.put(start_dfa_state)
-        ProgramData.imbue(visited_states[start_dfa_state], DebugTag.PARENT, self.states[next(iter(start_dfa_state))])
+        ProgramData.imbue(visited_states[start_dfa_state], DTAG.PARENT, self.states[next(iter(start_dfa_state))])
 
         while not to_process.empty():
             processing = to_process.get()
@@ -2347,7 +2399,7 @@ class RegexNFA:
                     if new_state not in visited_states:
                         # create the new state
                         visited_states[new_state] = RegexNFState()
-                        ProgramData.imbue(visited_states[new_state], DebugTag.PARENT, self.states[next(iter(new_state))])
+                        ProgramData.imbue(visited_states[new_state], DTAG.PARENT, self.states[next(iter(new_state))])
                         # should it be a finishing state?
                         if finishing_idx in new_state:
                             target_dfa.mark_finishing(visited_states[new_state])
@@ -2425,7 +2477,7 @@ class RegexNFA:
             new_state = RegexNFState()
             new_states[subset] = new_state
             new_dfa.add(new_state)
-            ProgramData.imbue(new_state, DebugTag.PARENT, state)
+            ProgramData.imbue(new_state, DTAG.PARENT, state)
 
             if state in self.finishing_states:
                 new_dfa.mark_finishing(new_state)
@@ -2455,7 +2507,7 @@ class RegexMatch(Match):
         # Create the simplified representation
         self.regex_tree = self._interpret_parse_tree(regex_parse_tree)
         self.regex_tree = self._simplify_regex_tree(self.regex_tree)
-        ProgramData.imbue(self.regex_tree, DebugTag.PARENT, self)
+        ProgramData.imbue(self.regex_tree, DTAG.PARENT, self)
 
         # Variables used during construction (similarly to how mlang works, to reduce arguments in recursive methods)
         self.nfa: Optional[RegexNFA] = None
@@ -2467,12 +2519,12 @@ class RegexMatch(Match):
         """
         Convert the regex tree object into the NFA using Thompson construction. Return the finish state
         """
-        ProgramData.imbue(r, DebugTag.PARENT, start_state)
+        ProgramData.imbue(r, DTAG.PARENT, start_state)
 
         if isinstance(r, RegexCharClass):
             # Simply convert to a boring form
             end_state = RegexNFState()
-            ProgramData.imbue(end_state, DebugTag.PARENT, start_state)
+            ProgramData.imbue(end_state, DTAG.PARENT, start_state)
             self.nfa.add(end_state)
             start_state.transition(r, end_state)
             return end_state
@@ -2487,7 +2539,7 @@ class RegexMatch(Match):
             sub_starts = [RegexNFState() for x in r.sub_matches]
             end_state = RegexNFState()
             self.nfa.add(end_state, *sub_starts)
-            ProgramData.imbue(end_state, DebugTag.PARENT, start_state)
+            ProgramData.imbue(end_state, DTAG.PARENT, start_state)
             # Link everything up
             for i, j in zip(sub_starts, r.sub_matches):
                 # Link e from start to sub start
@@ -2505,7 +2557,7 @@ class RegexMatch(Match):
             end_state = RegexNFState()
             sub_start = RegexNFState()
             self.nfa.add(end_state, sub_start)
-            ProgramData.imbue(end_state, DebugTag.PARENT, start_state)
+            ProgramData.imbue(end_state, DTAG.PARENT, start_state)
             start_state.transition(RegexNFState.Epsilon, end_state).transition(RegexNFState.Epsilon, sub_start)
             self._convert_to_nfa(r.sub_match, sub_start).transition(RegexNFState.Epsilon, end_state)
             return end_state
@@ -2521,7 +2573,7 @@ class RegexMatch(Match):
             end_state = RegexNFState()
             sub_start = RegexNFState()
             self.nfa.add(end_state, sub_start)
-            ProgramData.imbue(end_state, DebugTag.PARENT, start_state)
+            ProgramData.imbue(end_state, DTAG.PARENT, start_state)
             start_state.transition(RegexNFState.Epsilon, end_state).transition(RegexNFState.Epsilon, sub_start)
             self._convert_to_nfa(r.sub_match, sub_start).transition(RegexNFState.Epsilon, end_state).transition(RegexNFState.Epsilon, sub_start)
             return end_state
@@ -2557,8 +2609,8 @@ class RegexMatch(Match):
                 val = RegexSequence((sub_match, RegexKleene(sub_match)))
             else:
                 val = {"*": RegexKleene, "?": RegexOptional}[regex_tree.children[1].value](sub_match)
-            ProgramData.imbue(val, DebugTag.SOURCE_LINE, regex_tree.children[1].line)
-            ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, regex_tree.children[1].column)
+            ProgramData.imbue(val, DTAG.SOURCE_LINE, regex_tree.children[1].line)
+            ProgramData.imbue(val, DTAG.SOURCE_COLUMN, regex_tree.children[1].column)
             return val
         elif regex_tree.data == "regex_exact_repeat":
             repeated_match = self._interpret_parse_tree(regex_tree.children[0])
@@ -2584,8 +2636,8 @@ class RegexMatch(Match):
             v = RegexCharClass((regex_tree.value[1],))
         else:
             v = RegexCharClass((regex_tree.value[0],))
-        ProgramData.imbue(v, DebugTag.SOURCE_LINE, regex_tree.line)
-        ProgramData.imbue(v, DebugTag.SOURCE_COLUMN, regex_tree.column)
+        ProgramData.imbue(v, DTAG.SOURCE_LINE, regex_tree.line)
+        ProgramData.imbue(v, DTAG.SOURCE_COLUMN, regex_tree.column)
         return v
 
     def _convert_raw_regex_char_class(self, regex_char_class: lark.Tree):
@@ -2601,8 +2653,8 @@ class RegexMatch(Match):
             "S": InvertedRegexCharClass(string.whitespace),
             " ": RegexCharClass(" ")
         }[regex_char_class.children[0].value[0]]
-        ProgramData.imbue(val, DebugTag.SOURCE_LINE, regex_char_class.children[0].line)
-        ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, regex_char_class.children[0].column)
+        ProgramData.imbue(val, DTAG.SOURCE_LINE, regex_char_class.children[0].line)
+        ProgramData.imbue(val, DTAG.SOURCE_COLUMN, regex_char_class.children[0].column)
         return val
 
     def _visit_all_char_classes(self, regex_tree: lark.Tree):
@@ -2703,7 +2755,7 @@ class RegexMatch(Match):
         new_transitions = {frozenset((DFTransition.Else,)): (else_path, False)}
 
         new_state = DFState()
-        ProgramData.imbue(new_state, DebugTag.PARENT, nfdfa_state)
+        ProgramData.imbue(new_state, DTAG.PARENT, nfdfa_state)
         self.out_dfa_cache[id(nfdfa_state)] = new_state
         into.add(new_state)
 
@@ -2771,12 +2823,12 @@ class RegexMatch(Match):
         # Then convert to a DFA
 
         new_dfa = RegexNFA()
-        ProgramData.imbue(new_dfa, DebugTag.PARENT, self)
+        ProgramData.imbue(new_dfa, DTAG.PARENT, self)
         self.dfa_1 = self.nfa.convert_to_dfa(self.alphabet, new_dfa)
         # Minimize the DFA
 
         new_dfa = RegexNFA()
-        ProgramData.imbue(new_dfa, DebugTag.PARENT, self)
+        ProgramData.imbue(new_dfa, DTAG.PARENT, self)
         self.dfa_2 = self.dfa_1.minimize_dfa(self.alphabet, new_dfa)
         
         # Check if it's possible to schedule the finish actions. TODO: instead of throwing an error, attempt to move them to the next thing's start
@@ -2787,12 +2839,12 @@ class RegexMatch(Match):
         # Create a normal SM
         out_dfa = DFA()
         self._create_dfa_state(self.dfa_2.start_state, out_dfa, True, current_error_handlers[ErrorReasons.NO_MATCH])
-        return ProgramData.imbue(out_dfa, DebugTag.PARENT, self)
+        return ProgramData.imbue(out_dfa, DTAG.PARENT, self)
 
 class WaitMatch(Match):
     def __init__(self, sub_match: Match):
         super().__init__()
-        ProgramData.imbue(sub_match, DebugTag.PARENT, self)
+        ProgramData.imbue(sub_match, DTAG.PARENT, self)
         self.match_contents = sub_match
 
     def attach(self, action: Action):
@@ -2815,7 +2867,7 @@ class EndMatch(Match):
          0        1
         """
         sm = DFA()
-        ProgramData.imbue(sm, DebugTag.PARENT, self)
+        ProgramData.imbue(sm, DTAG.PARENT, self)
         start_state = DFState()
         sm.add(start_state)
         ok_state = DFState()
@@ -2830,7 +2882,7 @@ class ConcatMatch(Match):
         super().__init__()
         self.sub_matches = sub_matches
         for i in sub_matches:
-            ProgramData.imbue(i, DebugTag.PARENT, self)
+            ProgramData.imbue(i, DTAG.PARENT, self)
 
     def convert(self, current_error_handlers: dict):
         # distribute actions
@@ -2850,7 +2902,7 @@ class MatchNode(ActionSinkNode):
     """
 
     def __init__(self, match: Match):
-        ProgramData.imbue(match, DebugTag.PARENT, self)
+        ProgramData.imbue(match, DTAG.PARENT, self)
         self.match = match
         self.next = None
 
@@ -2941,7 +2993,7 @@ class CaseNode(Node):
 
         def create_real_state_of(state):
             new_state = DFState()
-            ProgramData.imbue(new_state, DebugTag.PARENT, next(iter(state))[1])
+            ProgramData.imbue(new_state, DTAG.PARENT, next(iter(state))[1])
 
             corresponds_to_finishes_in = set() 
             is_part_of = set()
@@ -3119,8 +3171,8 @@ class CaseNode(Node):
                 for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
                     # ... and reattach them to the new else state machine
                     trans.to(sub_dfas[original_backreference[None]].starting_state).attach(*else_actions).handles_else()
-                    ProgramData.imbue(trans, DebugTag.NAME, "else action on case node")
-                    ProgramData.imbue(trans, DebugTag.PARENT, self)
+                    ProgramData.imbue(trans, DTAG.NAME, "else action on case node")
+                    ProgramData.imbue(trans, DTAG.PARENT, self)
                 # We have to add that DFA's state to the overall dfa's states array, since it won't get picked up by mergable_ds _UNLESS_ original_backreference contains more than frozenset({None})
                 if len(original_backreference[None]) == 1:
                     for state in sub_dfas[original_backreference[None]].states:
@@ -3135,8 +3187,8 @@ class CaseNode(Node):
                 for trans in decider_dfa.transitions_pointing_to(current_error_handlers[ErrorReasons.NO_MATCH]):
                     trans.to(new_state).attach(*else_actions, prepend=True).fallthrough().handles_else()  # this is an error handler, make sure it's a fallthrough
                     # give the transition better debug info
-                    ProgramData.imbue(trans, DebugTag.NAME, "else action on case node")
-                    ProgramData.imbue(trans, DebugTag.PARENT, self)
+                    ProgramData.imbue(trans, DTAG.NAME, "else action on case node")
+                    ProgramData.imbue(trans, DTAG.PARENT, self)
 
         # Go through and link up all the states
         for i in mergeable_ds:
@@ -3157,7 +3209,7 @@ class CaseNode(Node):
                 refers_to = sub_dfas[original_backreference[i]]
                 decider_dfa.append_after(refers_to, current_error_handlers[ErrorReasons.NO_MATCH], sub_states=corresponding_finish_states[i], chain_actions=self.case_match_actions[original_backreference[i]])
 
-        ProgramData.imbue(decider_dfa, DebugTag.PARENT, self)
+        ProgramData.imbue(decider_dfa, DTAG.PARENT, self)
 
         # If we need to, add a boring after thing
         if self.next is not None:
@@ -3207,19 +3259,18 @@ class OptionalNode(ActionSinkNode):
 
         return sub_dfa
 
-class LoopNode(ActionSinkNode, HasDefaultDebugInfo):
+class LoopNode(ActionSinkNode):
     def __init__(self, name):
         self.name = name
         self.next = None
         self.after_break_actions = []
         self.loop_start_actions = []
         self.child_node = None
+        self.end_state = DFState()
+        ProgramData.imbue(self.end_state, DTAG.PARENT, self)
 
-        self.break_action = BreakAction(id(self))
-    
-    def debug_lookup(self, tag):
-        if tag == DebugTag.NAME:
-            return "loop node {}".format(self.name)
+        self.break_action = BreakAction(self)
+        ProgramData.imbue(self, DTAG.NAME, f"loop node {name}" if name else "anonymous loop")
 
     def _set_next(self, next_node):
         self.next = next_node
@@ -3244,6 +3295,14 @@ class LoopNode(ActionSinkNode, HasDefaultDebugInfo):
     def convert(self, current_error_handlers):
         if self.child_node is None:
             raise IllegalDFAStateError("Empty loop body", self)
+
+        parent_dfa = DFA()
+        parent_dfa.add(self.end_state)
+        parent_dfa.mark_accepting(self.end_state)
+
+        if self.next:
+            parent_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH])
+        
         # First, create the sub_dfa 
         sub_dfa = self.child_node.convert(current_error_handlers)
 
@@ -3251,20 +3310,23 @@ class LoopNode(ActionSinkNode, HasDefaultDebugInfo):
         for transition in sub_dfa.starting_state.all_transitions():
             transition.attach(*self.loop_start_actions)
 
-        # Create the finish state
-        end_state = DFState()
-        ProgramData.imbue(end_state, DebugTag.PARENT, self)
-        sub_dfa.add(end_state)
         # don't mark it accepting yet
 
         should_try_to_append = False
 
-        # Reroute all transitions with a BreakAction in them that corresponds to our break action to go to us
+        # Reroute all transitions with a BreakAction in them that corresponds to our break action to go to us immediately as an optimization.
         for transition in sub_dfa.transitions_that_do(self.break_action):
-            transition.to(end_state)
+            transition.to(self.end_state)
             transition.actions.remove(self.break_action)
             transition.actions.extend(self.after_break_actions)
             should_try_to_append = True
+
+        # Check if any actions are break actions
+        for transition in sub_dfa.all_transitions():
+            for action in transition.actions:
+                for subaction in action.all_subactions():
+                    if subaction == self.break_action:
+                        should_try_to_append = True
 
         # Verify that the accepting states are all distinct
         for accept_state in sub_dfa.accepting_states:
@@ -3276,15 +3338,15 @@ class LoopNode(ActionSinkNode, HasDefaultDebugInfo):
         for transition in itertools.chain(*(sub_dfa.transitions_pointing_to(x) for x in sub_dfa.accepting_states)):
             transition.to(sub_dfa.starting_state)
 
-        sub_dfa.accepting_states = [end_state]
-        
+        for state in sub_dfa.states:
+            parent_dfa.add(state)
+
+        parent_dfa.starting_state = sub_dfa.starting_state
+
         if self.next and not should_try_to_append:
             raise IllegalASTStateError("Unreachable states after loop", self.next)
 
-        elif should_try_to_append and self.next:
-            sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH])
-
-        return sub_dfa
+        return parent_dfa
 
 class TryExceptNode(ActionSinkNode, ActionSourceNode):
     def __init__(self, handles):
@@ -3432,6 +3494,10 @@ class IfElseNode(ActionSinkNode, ActionSourceNode):
 
         # Check if we can replace with an action-only node
         if all(x is None for x in self.branch_bodies.values()):
+            for actions in self.branch_actions.values():
+                for action in actions:
+                    if not action.embeddable():
+                        raise IllegalASTStateError("Unembeddable action inside action-only if/else node; place a match somewhere after the action?", action)
             self.equivalent_actions = [ConditionalAction(self.branches, self.branch_actions)]
 
     def _set_next(self, next_node):
@@ -3461,7 +3527,7 @@ class IfElseNode(ActionSinkNode, ActionSourceNode):
     def convert(self, current_error_handlers):
         # Generate condition dfa + start node
         dfa = DFA()
-        ProgramData.imbue(dfa, DebugTag.PARENT, self)
+        ProgramData.imbue(dfa, DTAG.PARENT, self)
         cond_point = DFConditionPoint()
         dfa.add(cond_point)
         dfa.starting_state = cond_point
@@ -3515,8 +3581,8 @@ class Macro:
         self.name = name_token.value
         self.parse_tree = parse_tree
         self.arguments = arguments
-        ProgramData.imbue(self, DebugTag.SOURCE_LINE, name_token.line)
-        ProgramData.imbue(self, DebugTag.NAME, "macro " + self.name)
+        ProgramData.imbue(self, DTAG.SOURCE_LINE, name_token.line)
+        ProgramData.imbue(self, DTAG.NAME, "macro " + self.name)
 
     def bind_arguments_for(self, input_trees: List[lark.Tree]):
         bound_arguments = {}
@@ -3668,15 +3734,15 @@ class ParseCtx:
         """
 
         if expr.data == "math_num":
-            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(int(expr.children[0].value)), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
+            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(int(expr.children[0].value)), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
         elif expr.data == "math_char_const":
-            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(ord(expr.children[0].value[1])), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
+            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(ord(expr.children[0].value[1])), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
         elif expr.data == "math_var":
             # Try to handle enums too
             if into_storage is not None and into_storage.type == OutputStorageType.ENUM and expr.children[0].value in into_storage.enum_values:
                 val = LiteralIntegerExpr(expr.children[0].value, OutputStorageType.ENUM, model_ref=into_storage)
-                ProgramData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
-                ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
+                ProgramData.imbue(val, DTAG.SOURCE_LINE, expr.children[0].line)
+                ProgramData.imbue(val, DTAG.SOURCE_COLUMN, expr.children[0].column)
                 return val
             try:
                 out_spec = self.state_object_spec[expr.children[0].value]
@@ -3689,13 +3755,13 @@ class ParseCtx:
                 except KeyError:
                     raise UndefinedReferenceError("output", target_name)
             try:
-                return ProgramData.imbue(ProgramData.imbue(OutIntegerExpr(out_spec), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
+                return ProgramData.imbue(ProgramData.imbue(OutIntegerExpr(out_spec), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
             except KeyError:
                 raise UndefinedReferenceError("output", expr.children[0])
         elif expr.data == "builtin_math_var":
             ref = expr.children[0]
             if ref.value == "last":
-                return ProgramData.imbue(ProgramData.imbue(LastCharIntegerExpr(), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
+                return ProgramData.imbue(ProgramData.imbue(LastCharIntegerExpr(), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
             else:
                 raise UndefinedReferenceError("builtin math variable", ref)
         elif expr.data == "sum_expr":
@@ -3727,13 +3793,13 @@ class ParseCtx:
 
         if expr.data == "number_const":
             val = LiteralIntegerExpr(int(expr.children[0].value))
-            ProgramData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
-            ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
+            ProgramData.imbue(val, DTAG.SOURCE_LINE, expr.children[0].line)
+            ProgramData.imbue(val, DTAG.SOURCE_COLUMN, expr.children[0].column)
             return val
         elif expr.data == "char_const":
             val = LiteralIntegerExpr(ord(expr.children[0].value[1]))
-            ProgramData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
-            ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
+            ProgramData.imbue(val, DTAG.SOURCE_LINE, expr.children[0].line)
+            ProgramData.imbue(val, DTAG.SOURCE_COLUMN, expr.children[0].column)
             return val
         elif expr.data == "identifier_const":
             try:
@@ -3751,8 +3817,8 @@ class ParseCtx:
                 raise UndefinedReferenceError("enumeration constant", expr)
             
             val = LiteralIntegerExpr(expr.children[0].value, OutputStorageType.ENUM, model_ref=into_storage)
-            ProgramData.imbue(val, DebugTag.SOURCE_LINE, expr.children[0].line)
-            ProgramData.imbue(val, DebugTag.SOURCE_COLUMN, expr.children[0].column)
+            ProgramData.imbue(val, DTAG.SOURCE_LINE, expr.children[0].line)
+            ProgramData.imbue(val, DTAG.SOURCE_COLUMN, expr.children[0].column)
             return val
         elif expr.data == "bool_const":
             if into_storage is None:
@@ -3763,7 +3829,7 @@ class ParseCtx:
                 result_type = into_storage.type
 
             try:
-                return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr({"true": 1, "false": 0}[expr.children[0].value], result_type), DebugTag.SOURCE_LINE, expr.line), DebugTag.SOURCE_COLUMN, expr.column)
+                return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr({"true": 1, "false": 0}[expr.children[0].value], result_type), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
             except KeyError as e:
                 raise UndefinedReferenceError("boolean constant", expr.children[0]) from e
         elif expr.data in all_sum_expr_nodes:
@@ -3779,26 +3845,26 @@ class ParseCtx:
         if expr.data == "string_const":
             actual_content = expr.children[0]
             match = DirectMatch(self._convert_string(actual_content.value))
-            ProgramData.imbue(match, DebugTag.SOURCE_LINE, actual_content.line)
-            ProgramData.imbue(match, DebugTag.SOURCE_COLUMN, actual_content.column)
+            ProgramData.imbue(match, DTAG.SOURCE_LINE, actual_content.line)
+            ProgramData.imbue(match, DTAG.SOURCE_COLUMN, actual_content.column)
             return match
         elif expr.data == "string_case_const":
             actual_content = expr.children[0]
             match = CaseDirectMatch(self._convert_string(actual_content.value))
-            ProgramData.imbue(match, DebugTag.SOURCE_LINE, actual_content.line)
-            ProgramData.imbue(match, DebugTag.SOURCE_COLUMN, actual_content.column)
+            ProgramData.imbue(match, DTAG.SOURCE_LINE, actual_content.line)
+            ProgramData.imbue(match, DTAG.SOURCE_COLUMN, actual_content.column)
             return match
         elif expr.data == "regex":
             match = RegexMatch(expr)
-            ProgramData.imbue(match, DebugTag.SOURCE_LINE, expr.line)
-            ProgramData.imbue(match, DebugTag.SOURCE_COLUMN, expr.column)
+            ProgramData.imbue(match, DTAG.SOURCE_LINE, expr.line)
+            ProgramData.imbue(match, DTAG.SOURCE_COLUMN, expr.column)
             return match
         elif expr.data == "end_expr":
             if not ProgramData.do(ProgramFlag.EOF_SUPPORT):
                 raise IllegalParseTree("end match but EOF support is not enabled", expr)
             match = EndMatch()
-            ProgramData.imbue(match, DebugTag.SOURCE_LINE, expr.line)
-            ProgramData.imbue(match, DebugTag.SOURCE_COLUMN, expr.column)
+            ProgramData.imbue(match, DTAG.SOURCE_LINE, expr.line)
+            ProgramData.imbue(match, DTAG.SOURCE_COLUMN, expr.column)
             return match
         elif expr.data == "concat_expr":
             return ConcatMatch(list(self._parse_match_expr(x) for x in expr.children))
@@ -3873,7 +3939,7 @@ class ParseCtx:
         self.bound_argument_stack.append(
             self.macros[name].bind_arguments_for(arguments)
         )
-        node = ProgramData.imbue(self._parse_stmt_seq(self.macros[name].parse_tree), DebugTag.PARENT, self.macros[name])
+        node = ProgramData.imbue(self._parse_stmt_seq(self.macros[name].parse_tree), DTAG.PARENT, self.macros[name])
         del self.bound_argument_stack[-1]
         return node
 
@@ -3900,13 +3966,13 @@ class ParseCtx:
                         except UndefinedReferenceError:
                             pass
                     if name in self.hooks:
-                        return ActionNode(ProgramData.imbue(ProgramData.imbue(CallHook(name), DebugTag.SOURCE_LINE, stmt.line), DebugTag.SOURCE_COLUMN, stmt.column))
+                        return ActionNode(ProgramData.imbue(ProgramData.imbue(CallHook(name), DTAG.SOURCE_LINE, stmt.line), DTAG.SOURCE_COLUMN, stmt.column))
                     else:
                         raise UndefinedReferenceError("callable", stmt.children[0])
         elif stmt.data == "finish_stmt":
             act = FinishAction()
-            ProgramData.imbue(act, DebugTag.SOURCE_LINE, stmt.line)
-            ProgramData.imbue(act, DebugTag.SOURCE_COLUMN, stmt.column)
+            ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.line)
+            ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.column)
             return ActionNode(act)
         elif stmt.data == "break_stmt":
             if stmt.children:
@@ -3923,16 +3989,16 @@ class ParseCtx:
                 act = self.innermost_break_handler
             if act is None:
                 raise IllegalParseTree("Break outside of loop", stmt)
-            ProgramData.imbue(act, DebugTag.SOURCE_LINE, stmt.line)
-            ProgramData.imbue(act, DebugTag.SOURCE_COLUMN, stmt.column)
+            ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.line)
+            ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.column)
             return ActionNode(act)
         elif stmt.data in ("assign_stmt", "append_stmt"):
-            return ProgramData.imbue(self._parse_assign_stmt(stmt, stmt.data == "append_stmt"), DebugTag.SOURCE_LINE, stmt.line, DebugTag.SOURCE_COLUMN, stmt.column)
+            return ProgramData.imbue(self._parse_assign_stmt(stmt, stmt.data == "append_stmt"), DTAG.SOURCE_LINE, stmt.line, DTAG.SOURCE_COLUMN, stmt.column)
         elif stmt.data == "case_stmt":
             # Find all of the matches
             return ProgramData.imbue(ProgramData.imbue(CaseNode({k: v for k, v in (self._parse_case_clause(x) for x in stmt.children)}), 
-                DebugTag.SOURCE_LINE, stmt.line),
-                DebugTag.SOURCE_COLUMN, stmt.column
+                DTAG.SOURCE_LINE, stmt.line),
+                DTAG.SOURCE_COLUMN, stmt.column
             )
         elif stmt.data == "if_stmt":
             conditions_ordered = []
@@ -3946,8 +4012,8 @@ class ParseCtx:
                     condition_map[condition] = self._parse_stmt_seq(condition_tree.children[1:])
 
                 ProgramData.imbue(condition,
-                    DebugTag.SOURCE_LINE, condition_tree.line,
-                    DebugTag.SOURCE_COLUMN, condition_tree.column
+                    DTAG.SOURCE_LINE, condition_tree.line,
+                    DTAG.SOURCE_COLUMN, condition_tree.column
                 )
                 conditions_ordered.append(condition)
             if not isinstance(conditions_ordered[-1], ElseCondition):
@@ -3955,8 +4021,8 @@ class ParseCtx:
                 condition_map[conditions_ordered[-1]] = None
             return ProgramData.imbue(
                 IfElseNode(conditions_ordered, condition_map),
-                DebugTag.SOURCE_LINE, stmt.line,
-                DebugTag.SOURCE_COLUMN, stmt.column
+                DTAG.SOURCE_LINE, stmt.line,
+                DTAG.SOURCE_COLUMN, stmt.column
             )
         elif stmt.data == "optional_stmt":
             return OptionalNode(self._parse_stmt_seq(stmt.children))
@@ -4411,7 +4477,7 @@ class CodegenCtx:
 
         return f"strncpy(state->c.{into.name}, \"{self._escape_string(value)}\", {into.str_size});"
 
-    def _generate_action_implementation(self, action: Action, is_start: bool = False, is_end: bool = False):
+    def _generate_action_implementation(self, action: Action, is_start: bool = False, is_end: bool = False, transition=None):
         result = Outputter()
         ctx = IntegerExprUseContext.ASSIGN_ON_MATCH
         if is_start:
@@ -4441,7 +4507,13 @@ class CodegenCtx:
             # We treat the size given in by the user as including a terminating null
             # Admittedly, this is a little hit or miss, but if they give too long a string it's really their fault so /shrug
             # TODO: customization point to disable this and not put terminating nulls on strings
-            result.add(f"if (state->{action.into_storage.name}_counter == {action.into_storage.str_size-1}) state->state = {self.dfa.states.index(action.end_target)};")
+            result.add(f"if (state->{action.into_storage.name}_counter == {action.into_storage.str_size-1}) {{")
+            ProgramData.imbue(action, DTAG.ACTION_MAY_SKIP, True)
+            with result as body:
+                body.add(f"state->state = {self.dfa.states.index(action.end_target)};")
+                if transition is not None:
+                    body.add(f"goto {self._transition_skip_action_label(transition)};")
+            result.add("}")
             result.add("else {")
             with result as body:
                 target_expression = "inval" if isinstance(action, AppendTo) else self._generate_code_for_int_expr(
@@ -4472,14 +4544,24 @@ class CodegenCtx:
                         generated_if = True
                         cond_name = "if"
 
-                    result.add(f"{cond_name} ({self._generate_condition(condition, is_start or is_end)}) {{")
+                    result.add(f"{cond_name} ({self._generate_condition(condition, is_start or is_end, True)}) {{")
 
                 # Generate condition body like normal
                 with result as body:
                     for sub_act in action.sub_actions[condition]:
-                        body += self._generate_action_implementation(sub_act, is_start=is_start, is_end=is_end)
+                        body += self._generate_action_implementation(sub_act, is_start=is_start, is_end=is_end, transition=transition)
 
                 result.add("}")
+        elif isinstance(action, BreakAction):
+            if transition is None:
+                raise IllegalDFAStateError("Break action placed on action outside of transition", action)
+            # Generate all subactions
+            result.add("// break subactions")
+            for subaction in action.replacement_actions():
+                result += self._generate_action_implementation(subaction, is_start=is_start, is_end=is_end, transition=transition)
+            result.add(f"state->state = {self.dfa.states.index(action.refers_to.end_state)};")
+            result.add(f"goto {self._transition_skip_action_label(transition)};")
+            ProgramData.imbue(action, DTAG.ACTION_MAY_SKIP, True)
         else:
             raise NotImplementedError(action)
         return result.value()
@@ -4603,6 +4685,9 @@ class CodegenCtx:
             return False
         return all(x.get_target_override_mode() == ActionOverrideMode.NONE for x in transition.actions)
 
+    def _transition_skip_action_label(self, transition: DFTransition):
+        return f"skipaction_{id(transition)}"
+
     def _generate_transition_body(self, transition: DFTransition, from_end=False):
         transition_body = Outputter()
         # Set the next state
@@ -4615,16 +4700,26 @@ class CodegenCtx:
         for action in transition.actions:
             transition_body.add()
             transition_body.add(f"// action {action!r} ")
-            transition_body += self._generate_action_implementation(action, is_end=from_end)
+            transition_body += self._generate_action_implementation(action, is_end=from_end, transition=transition)
+        if any(
+            any(
+                ProgramData.lookup(subact, DTAG.ACTION_MAY_SKIP, recurse_upwards=False, default=False) for subact in action.all_subactions()
+            ) for action in transition.actions
+        ):
+            transition_body.add("// skip action label")
+            transition_body.add(f"{self._transition_skip_action_label(transition)}:")
         # Check if we should fallthrough and generate a goto
         if transition.is_fallthrough:
             if transition.target in self.dfa.states:
                 transition_body.add(f"// fallthrough")
-                transition_body.add(f"goto fall_{self.dfa.states.index(transition.target)};")
+                if self._transition_will_directly_jump(transition):
+                    transition_body.add(f"goto fall_{self.dfa.states.index(transition.target)};")
+                else:
+                    transition_body.add(f"goto repeatswitch;");
             else:
                 transition_body.add("// fallthrough to terminate")
         # Otherwise, if this state is targeting an accept state, return DONE instead of OK
-        elif transition.target in self.dfa.accepting_states and not ProgramData.do(ProgramFlag.STRICT_DONE_TOKEN_GENERATION):
+        elif transition.target in self.dfa.accepting_states and not ProgramData.do(ProgramFlag.STRICT_DONE_TOKEN_GENERATION) and all(x.error_handling for x in transition.target.transitions):
             transition_body.add("// immediately return DONE")
             transition_body.add(f"return {self.program_name.upper()}_DONE;")
         # Normally, though, just generate a jump to the next jpto
@@ -4645,11 +4740,17 @@ class CodegenCtx:
                 pass # terminating state
         return transition_body.value()
 
-    def _generate_condition(self, condition: DFCondition, from_end=False):
+    def _generate_condition(self, condition: DFCondition, from_end=False, from_action=False):
+        use_ctx = {
+            (False, False): IntegerExprUseContext.CONDITION_PREDICATE,
+            (True, False): IntegerExprUseContext.CONDITION_PREDICATE_END,
+            (False, True): IntegerExprUseContext.CONDITION_PREDICATE_ACTION,
+            (True, True): IntegerExprUseContext.CONDITION_PREDICATE_ACTION_END,
+        }[(from_end, from_action)]
         if isinstance(condition, ConstantCondition):
             return str(condition.get_literal_result()).lower()
         elif isinstance(condition, IntegerCondition):
-            return self._generate_code_for_int_expr(condition.expr, IntegerExprUseContext.CONDITION_PREDICATE_END if from_end else IntegerExprUseContext.CONDITION_PREDICATE)
+            return self._generate_code_for_int_expr(condition.expr, use_ctx)
 
     def _generate_condition_point_body(self, state: DFConditionPoint, from_end=False):
         result = Outputter()
@@ -4839,13 +4940,13 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
     if not debug_enabled:
         raise RuntimeError("Debugging was disabled! You probably need to install graphviz")
 
-    g = graphviz.Digraph(name='dfa', comment=ProgramData.lookup(dfa, DebugTag.NAME))
+    g = graphviz.Digraph(name='dfa', comment=ProgramData.lookup(dfa, DTAG.NAME))
 
     nodes = []
     edges = []
 
     def build_label_condition(condition: DFCondition):
-        val = ProgramData.lookup(condition, DebugTag.NAME)
+        val = ProgramData.lookup(condition, DTAG.NAME)
         if not val:
             val = repr(condition)
         return graphviz.escape(val)
@@ -4917,9 +5018,9 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
         if state == highlight:
             shape = "triangle"
 
-        parent_thing = ProgramData.lookup(state, DebugTag.PARENT)
+        parent_thing = ProgramData.lookup(state, DTAG.PARENT)
         while parent_thing and not isinstance(parent_thing, (Node, Match)):
-            parent_thing = ProgramData.lookup(parent_thing, DebugTag.PARENT)
+            parent_thing = ProgramData.lookup(parent_thing, DTAG.PARENT)
         parent_id = (id(parent_thing) * 11400714819323198485) & ((1 << 64)-1)
         parent_id >>= (64-24)
         parent_id |= 0x808080
@@ -4939,10 +5040,11 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
             is_real = True
 
             for action in transition.actions:
-                acname = ProgramData.lookup(action, DebugTag.NAME, recurse_upwards=False)
+                acname = ProgramData.lookup(action, DTAG.NAME, recurse_upwards=False)
                 if acname:
                     label += "\n{}".format(acname)
                 else:
+                    acname = repr(action)
                     label += f"\n{action!r}"
                 if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.MAY_GOTO_TARGET]:
                     for tgt in action.get_target_override_targets():
@@ -4961,7 +5063,7 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
         g.node(str(id(v)), shape="rectangle", label=f"{transition_similar_count[v]} others", color="blue", fontsize="10")
         if type(next(iter(values))) is int:
             acid = next(iter(values))
-            label = f"{ProgramData.lookup(replaced_actions[acid], DebugTag.NAME, recurse_upwards=False)} side effect"
+            label = f"{ProgramData.lookup(replaced_actions[acid], DTAG.NAME, recurse_upwards=False)} side effect"
         else:
             label = build_label_onvalues(values)
         g.edge(str(id(v)), str(id(target)), label=label)
@@ -4975,7 +5077,7 @@ def debug_dump_regexnfa(nfa: RegexNFA, out_name="nfa"): # pragma: no cover
     if not debug_enabled:
         raise RuntimeError("Debugging was disabled! You probably need to install graphviz")
 
-    g = graphviz.Digraph(name='nfa', comment=ProgramData.lookup(nfa, DebugTag.NAME))
+    g = graphviz.Digraph(name='nfa', comment=ProgramData.lookup(nfa, DTAG.NAME))
 
     nodes = []
     edges = []
@@ -5032,7 +5134,7 @@ def debug_dump_ast(ast, out_name="ast", into=None, coming_from=None, make_id=Non
         if type(x).__repr__ != object.__repr__:
             base = repr(x)
 
-        name = ProgramData.lookup(x, DebugTag.NAME, recurse_upwards=False)
+        name = ProgramData.lookup(x, DTAG.NAME, recurse_upwards=False)
         if name:
             base += f" ({name})"
 

@@ -1,0 +1,9 @@
+parser {
+    loop {
+        /asd\w/;
+        if $last == 'f' {
+            break;
+        }
+    }
+    "end";
+}
