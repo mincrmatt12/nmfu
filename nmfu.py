@@ -127,6 +127,7 @@ atom: BOOL_CONST -> bool_const
     | NUMBER -> number_const
     | CHAR_CONSTANT -> char_const
     | STRING "i" -> string_case_const
+    | STRING "b" -> binary_string_const
     | STRING -> string_const
     | IDENTIFIER -> identifier_const
 
@@ -3667,7 +3668,7 @@ class Macro:
                 MacroArgumentKind.OUT: ("identifier_const",),
                 MacroArgumentKind.HOOK: ("identifier_const",),
                 MacroArgumentKind.LOOP: ("identifier_const",),
-                MacroArgumentKind.MATCH: ("regex", "end_expr", "concat_expr", "string_const", "string_case_const", "binary_regex"),
+                MacroArgumentKind.MATCH: ("regex", "end_expr", "concat_expr", "string_const", "string_case_const", "binary_regex", "binary_string_const"),
                 MacroArgumentKind.INTEXPR: ("string_const", "bool_const", "number_const", "char_const", "identifier_const", *all_sum_expr_nodes)
             }[argspec.kind]
             if value.data not in allowed_types:
@@ -3778,6 +3779,19 @@ class ParseCtx:
                     i += 1
         return result
 
+    def _convert_binary_string(self, binary_string: str):
+        """
+        Parse the hex binary string (with quotes too)
+        """
+
+        contents = [x for x in binary_string[1:-1] if x in string.hexdigits]
+        result = ""
+
+        for word in zip(contents[::2], contents[1::2]):
+            result += chr(int(word[0] + word[1], base=16))
+
+        return result
+
     def _parse_out_decl(self, decl: lark.Tree) -> OutputStorage:
         """
         Parse an output declaration
@@ -3866,7 +3880,7 @@ class ParseCtx:
         Parse an integer type expr (also has bool/etc.)
         """
 
-        BANNED_TYPES = ["end_expr", "concat_expr", "regex", "string_const", "string_case_const", "binary_regex"]
+        BANNED_TYPES = ["end_expr", "concat_expr", "regex", "string_const", "string_case_const", "binary_regex", "binary_string_const"]
         if expr.data in BANNED_TYPES:
             raise IllegalParseTree("String-typed value encountered for integer-typed expression", expr)
 
@@ -3921,9 +3935,13 @@ class ParseCtx:
         """
         Parse a match expression into a match object
         """
-        if expr.data == "string_const":
+        if expr.data in ["string_const", "binary_string_const"]:
             actual_content = expr.children[0]
-            match = DirectMatch(self._convert_string(actual_content.value))
+            if expr.data == "string_const":
+                match = DirectMatch(self._convert_string(actual_content.value))
+            else:
+                match = DirectMatch(self._convert_binary_string(actual_content.value))
+                ProgramData.imbue(match, DTAG.NAME, f"binary match {expr.children[0].value}")
             ProgramData.imbue(match, DTAG.SOURCE_LINE, actual_content.line)
             ProgramData.imbue(match, DTAG.SOURCE_COLUMN, actual_content.column)
             return match
