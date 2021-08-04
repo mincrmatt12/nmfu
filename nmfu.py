@@ -2539,7 +2539,7 @@ class RegexMatch(Match):
         """
         Convert the regex tree object into the NFA using Thompson construction. Return the finish state
         """
-        ProgramData.imbue(r, DTAG.PARENT, start_state)
+        ProgramData.imbue(start_state, DTAG.PARENT, r)
 
         if isinstance(r, RegexCharClass):
             # Simply convert to a boring form
@@ -2905,7 +2905,7 @@ class BinaryRegexMatch(RegexMatch):
             incoming_set = RegexCharClass(())
             for child in regex_tree.children:
                 if isinstance(child, lark.Token):
-                    new_set = self._convert_raw_regex_byte(child)
+                    new_set = self._convert_raw_regex_unimportant(child)
                 elif child.data == "binary_regex_set_range":
                     start = list(self._convert_raw_regex_unimportant(child.children[0]).chars)[0]
                     end = list(self._convert_raw_regex_unimportant(child.children[1]).chars)[0]
