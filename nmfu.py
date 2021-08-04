@@ -118,6 +118,7 @@ catch_options: "(" CATCH_OPTION ("," CATCH_OPTION)* ")"
 
 ?expr: atom // either literal or string depending on context
      | regex // not an atom to simplify things
+     | binary_regex
      | "end" -> end_expr
      | "(" expr+ ")" -> concat_expr
      | "[" _math_expr "]"
@@ -144,14 +145,13 @@ _math_expr: disjunction_expr
 
 // REGEX
 
+// Uses templates to avoid duplication
+
 regex: "/" regex_alternation "/"
 
 regex_char_class: "\\" REGEX_CHARCLASS
-
 ?regex_alternation: regex_group ("|" regex_group)*
-
 ?regex_group: regex_alternation_element+
-
 ?regex_alternation_element: regex_literal
                           | regex_literal REGEX_OP -> regex_operation
                           | regex_literal "{" NUMBER "}" -> regex_exact_repeat
@@ -168,6 +168,25 @@ regex_char_class: "\\" REGEX_CHARCLASS
 ?regex_set_element: REGEX_CHARGROUP_ELEMENT_RAW
                   | REGEX_CHARGROUP_ELEMENT_RAW "-" REGEX_CHARGROUP_ELEMENT_RAW -> regex_set_range
                   | regex_char_class
+
+binary_regex: "b/" binary_regex_alternation "/"
+?binary_regex_alternation: binary_regex_group ("|" binary_regex_group)*
+
+?binary_regex_group: binary_regex_alternation_element+
+?binary_regex_alternation_element: binary_regex_literal
+                          | binary_regex_literal REGEX_OP -> binary_regex_operation
+                          | binary_regex_literal "{" NUMBER "}" -> binary_regex_exact_repeat
+                          | binary_regex_literal "{" NUMBER "," NUMBER "}" -> binary_regex_range_repeat
+                          | binary_regex_literal "{" NUMBER "," "}" -> binary_regex_at_least_repeat
+
+?binary_regex_literal: REGEX_BYTE -> binary_regex_raw_match // creates multiple char classes
+                     | "(" binary_regex_alternation ")" -> binary_regex_group
+                     | "[^" binary_regex_set_element+ "]" -> binary_regex_inverted_set // creates an inverted char class
+                     | "[" binary_regex_set_element+ "]" -> binary_regex_set // creates a char class
+                     | "." -> binary_regex_any // creates an inverted char class
+
+?binary_regex_set_element: REGEX_BYTE
+                         | REGEX_BYTE "-" REGEX_BYTE -> binary_regex_set_range
 
 // BINARY REGEX
 
@@ -187,6 +206,7 @@ REGEX_UNIMPORTANT: /[^.?*()\[\]\\+{}|\/]|\\\.|\\\*|\\\(|\\\)|\\\[|\\\]|\\\+|\\\\
 REGEX_OP: /[+*?]/
 REGEX_CHARGROUP_ELEMENT_RAW: /[^\-\]\\\/]|\\-|\\\]|\\\\|\\\//
 REGEX_CHARCLASS: /[wWdDsSntr ]/
+REGEX_BYTE: /[0-9a-fA-F]{2}/
 
 // math
 SUM_OP: /[+-]/
@@ -2595,15 +2615,30 @@ class RegexMatch(Match):
         return r
 
     def _interpret_parse_tree(self, regex_tree: lark.Tree):
-        if regex_tree.data in ("regex", "regex_group"):
+        tree_data = regex_tree.data
+        if tree_data.startswith("binary_"):
+            tree_data = tree_data[len("binary_"):]
+        if tree_data in ("regex", "regex_group"):
             return RegexSequence(self._interpret_parse_tree(x) for x in regex_tree.children)
-        elif regex_tree.data in ("regex_any", "regex_char_class", "regex_set", "regex_inverted_set"):
-            return RegexAlternation(self.character_class_mappings[list(self._visit_all_char_classes(regex_tree))[0]])
-        elif regex_tree.data == "regex_alternation":
-            return RegexAlternation(self._interpret_parse_tree(x) for x in regex_tree.children)
-        elif regex_tree.data == "regex_raw_match":
-            return RegexAlternation(self.character_class_mappings[self._convert_raw_regex_unimportant(regex_tree.children[0])])
-        elif regex_tree.data == "regex_operation":
+        elif tree_data in ("regex_any", "regex_char_class", "regex_set", "regex_inverted_set"):
+            return ProgramData.imbue(
+                RegexAlternation(self.character_class_mappings[list(self._visit_all_char_classes(regex_tree))[0]]),
+                DTAG.SOURCE_LINE, regex_tree.line,
+                DTAG.SOURCE_COLUMN, regex_tree.column
+            )
+        elif tree_data == "regex_alternation":
+            return ProgramData.imbue(
+                RegexAlternation(self._interpret_parse_tree(x) for x in regex_tree.children),
+                DTAG.SOURCE_LINE, regex_tree.line,
+                DTAG.SOURCE_COLUMN, regex_tree.column
+            )
+        elif tree_data == "regex_raw_match":
+            return ProgramData.imbue(
+                RegexAlternation(self.character_class_mappings[self._convert_raw_regex_unimportant(regex_tree.children[0])]),
+                DTAG.SOURCE_LINE, regex_tree.line,
+                DTAG.SOURCE_COLUMN, regex_tree.column
+            )
+        elif tree_data == "regex_operation":
             sub_match = self._interpret_parse_tree(regex_tree.children[0])
             if regex_tree.children[1].value == "+":
                 val = RegexSequence((sub_match, RegexKleene(sub_match)))
@@ -2612,24 +2647,35 @@ class RegexMatch(Match):
             ProgramData.imbue(val, DTAG.SOURCE_LINE, regex_tree.children[1].line)
             ProgramData.imbue(val, DTAG.SOURCE_COLUMN, regex_tree.children[1].column)
             return val
-        elif regex_tree.data == "regex_exact_repeat":
+        elif tree_data == "regex_exact_repeat":
             repeated_match = self._interpret_parse_tree(regex_tree.children[0])
             repeat_times   = int(regex_tree.children[1].value)
-            return RegexSequence(itertools.repeat(repeated_match, repeat_times))
-        elif regex_tree.data == "regex_at_least_repeat":
+            return ProgramData.imbue(
+                RegexSequence(itertools.repeat(repeated_match, repeat_times)),
+                DTAG.SOURCE_LINE, regex_tree.children[1].line,
+                DTAG.SOURCE_COLUMN, regex_tree.children[1].column
+            )
+        elif tree_data == "regex_at_least_repeat":
             repeated_match = self._interpret_parse_tree(regex_tree.children[0])
             repeat_times   = int(regex_tree.children[1].value)
-            return RegexSequence([repeated_match for x in range(repeat_times)] + [RegexKleene(repeated_match)])
-        elif regex_tree.data == "regex_range_repeat":
+            return ProgramData.imbue(
+                RegexSequence([repeated_match for x in range(repeat_times)] + [RegexKleene(repeated_match)]),
+                DTAG.SOURCE_LINE, regex_tree.children[1].line,
+                DTAG.SOURCE_COLUMN, regex_tree.children[1].column
+            )
+        elif tree_data == "regex_range_repeat":
             repeated_match = self._interpret_parse_tree(regex_tree.children[0])
             repeat_times_min = int(regex_tree.children[1].value)
             repeat_times_max = int(regex_tree.children[2].value)
-            return RegexSequence(itertools.chain(
+            return ProgramData.imbue(RegexSequence(itertools.chain(
                 itertools.repeat(repeated_match, repeat_times_min),
                 itertools.repeat(RegexOptional(repeated_match), repeat_times_max - repeat_times_min)
-            ))
+            )),
+                DTAG.SOURCE_LINE, regex_tree.children[1].line,
+                DTAG.SOURCE_COLUMN, regex_tree.children[1].column,
+            )
         else:
-            raise NotImplementedError("don't handle {} yet".format(regex_tree.data))
+            raise NotImplementedError("don't handle {} yet".format(tree_data))
 
     def _convert_raw_regex_unimportant(self, regex_tree: lark.Token):
         if regex_tree.value[0] == '\\':
@@ -2840,6 +2886,41 @@ class RegexMatch(Match):
         out_dfa = DFA()
         self._create_dfa_state(self.dfa_2.start_state, out_dfa, True, current_error_handlers[ErrorReasons.NO_MATCH])
         return ProgramData.imbue(out_dfa, DTAG.PARENT, self)
+
+class BinaryRegexMatch(RegexMatch):
+    def _visit_all_char_classes(self, regex_tree: lark.Tree):
+        if regex_tree.data in ("binary_regex", "binary_regex_group", "binary_regex_alternation"):
+            result = set()
+            for child in regex_tree.children:
+                result |= self._visit_all_char_classes(child)
+            return result
+        if regex_tree.data == "binary_regex_raw_match":
+            return set(self._convert_raw_regex_unimportant(x) for x in regex_tree.children)
+        if regex_tree.data == "binary_regex_any":
+            return set((InvertedRegexCharClass(()),))
+        if regex_tree.data in ("binary_regex_operation", "binary_regex_exact_repeat", "binary_regex_range_repeat", "binary_regex_at_least_repeat"):
+            return self._visit_all_char_classes(regex_tree.children[0])
+        if regex_tree.data in ("binary_regex_set", "binary_regex_inverted_set"):
+            inverted = regex_tree.data != "binary_regex_set"
+            incoming_set = RegexCharClass(())
+            for child in regex_tree.children:
+                if isinstance(child, lark.Token):
+                    new_set = self._convert_raw_regex_byte(child)
+                elif child.data == "binary_regex_set_range":
+                    start = list(self._convert_raw_regex_unimportant(child.children[0]).chars)[0]
+                    end = list(self._convert_raw_regex_unimportant(child.children[1]).chars)[0]
+                    new_set = RegexCharClass(chr(x) for x in range(ord(start), ord(end)+1))
+                incoming_set = incoming_set.union(new_set)
+            if not inverted:
+                return set((incoming_set,))
+            else:
+                return set((incoming_set.invert(),))
+
+    def _convert_raw_regex_unimportant(self, byte: lark.Token):
+        v = RegexCharClass((chr(int(byte.value, base=16)),))
+        ProgramData.imbue(v, DTAG.SOURCE_LINE, byte.line)
+        ProgramData.imbue(v, DTAG.SOURCE_COLUMN, byte.column)
+        return v
 
 class WaitMatch(Match):
     def __init__(self, sub_match: Match):
@@ -3586,7 +3667,7 @@ class Macro:
                 MacroArgumentKind.OUT: ("identifier_const",),
                 MacroArgumentKind.HOOK: ("identifier_const",),
                 MacroArgumentKind.LOOP: ("identifier_const",),
-                MacroArgumentKind.MATCH: ("regex", "end_expr", "concat_expr", "string_const", "string_case_const"),
+                MacroArgumentKind.MATCH: ("regex", "end_expr", "concat_expr", "string_const", "string_case_const", "binary_regex"),
                 MacroArgumentKind.INTEXPR: ("string_const", "bool_const", "number_const", "char_const", "identifier_const", *all_sum_expr_nodes)
             }[argspec.kind]
             if value.data not in allowed_types:
@@ -3680,7 +3761,11 @@ class ParseCtx:
             else:
                 i += 1
                 if contents[i] == "x" or contents[i] == "u":
-                    raise NotImplementedError("don't support uescapes yet")
+                    if contents[i] == "u":
+                        raise NotImplementedError("don't support uescapes yet")
+                    code = contents[i+1:i+3]
+                    result += chr(int(code, base=16))
+                    i += 3
                 else:
                     result += {
                         'n': '\n',
@@ -3781,7 +3866,7 @@ class ParseCtx:
         Parse an integer type expr (also has bool/etc.)
         """
 
-        BANNED_TYPES = ["end_expr", "concat_expr", "regex", "string_const", "string_case_const"]
+        BANNED_TYPES = ["end_expr", "concat_expr", "regex", "string_const", "string_case_const", "binary_regex"]
         if expr.data in BANNED_TYPES:
             raise IllegalParseTree("String-typed value encountered for integer-typed expression", expr)
 
@@ -3850,6 +3935,11 @@ class ParseCtx:
             return match
         elif expr.data == "regex":
             match = RegexMatch(expr)
+            ProgramData.imbue(match, DTAG.SOURCE_LINE, expr.line)
+            ProgramData.imbue(match, DTAG.SOURCE_COLUMN, expr.column)
+            return match
+        elif expr.data == "binary_regex":
+            match = BinaryRegexMatch(expr)
             ProgramData.imbue(match, DTAG.SOURCE_LINE, expr.line)
             ProgramData.imbue(match, DTAG.SOURCE_COLUMN, expr.column)
             return match
