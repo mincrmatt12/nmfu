@@ -1,0 +1,14 @@
+// ok: >hhahhf
+// bad: >fhhf
+// ok: >hhf
+
+parser {
+    ">";
+    loop {
+        /[^af]+/;
+        case {
+            "f" -> {break;}
+            "a" -> {}
+        }
+    }
+}

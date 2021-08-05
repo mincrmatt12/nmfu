@@ -764,7 +764,11 @@ class DFA:
             sub_local_alphabet = sub_state.local_alphabet()
             local_else_additions = sub_local_alphabet - chained_local_alphabet
 
+            culled_chained_transitions = []
+
             for transition in chained_transitions:
+                culled_transition = transition.copy()
+
                 relevant_values = set(transition.on_values)
                 if DFTransition.Else in relevant_values:
                     relevant_values.update(local_else_additions)
@@ -784,10 +788,11 @@ class DFA:
                     target_map = {target: relevant_values}
 
                 if transition.error_handling:
-                    # Ignore
-                    continue
-
-                if not all(x.error_handling or x.target == transition.target for x in targets):
+                    # Cull values
+                    for j in relevant_values.copy():
+                        if sub_state[j] is not None and not sub_state[j].error_handling:
+                            relevant_values.remove(j)
+                elif not all(x.error_handling or x.target == transition.target for x in targets):
                     if ProgramData.dump(DebugDumpable.DFA) and ProgramData.do(ProgramFlag.VERBOSE_AMBIG_ERRORS):
                         debug_dump_dfa(self, "ae_dfa2", highlight=sub_state)
                         debug_dump_dfa(chained_dfa, "ae_dfa1")
@@ -797,24 +802,13 @@ class DFA:
                     dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("TE", error_handling_state)
                     raise IllegalDFAStateConflictsError("Ambiguous transitions detected while joining DFAs", sub_state, transition)
 
-            for transition in chained_transitions:
-                relevant_values = set(transition.on_values)
-                if DFTransition.Else in relevant_values:
-                    relevant_values.update(local_else_additions)
-                # If this is an error-handler, be sure to cull to avoid duplicates
-                if transition.error_handling:
-                    for j in relevant_values.copy():
-                        if sub_state[j] is not None and not sub_state[j].error_handling:
-                            relevant_values.remove(j)
-                # This transition is OK, and so we can add it.
-                new_transition = transition.copy()
-                new_transition.on_values = list(relevant_values)
-                #print("NTT", new_transition)
-                #print(valid_replacers)
-                #print(new_transition, transition)
-                #debug_dump_dfa(chained_dfa, "dfa1")
-                #debug_dump_dfa(self, "dfa2", sub_state)
-                sub_state.transition(new_transition.attach(*chain_actions, prepend=True), allow_replace_if=lambda x: x.error_handling or x.target in valid_replacers)
+                # Create transition to add
+                culled_transition.on_values = list(relevant_values)
+                culled_transition.attach(*chain_actions, prepend=True)
+                culled_chained_transitions.append(culled_transition)
+
+            for new_transition in culled_chained_transitions:
+                sub_state.transition(new_transition, allow_replace_if=lambda x: x.error_handling or x.target in valid_replacers)
 
         # Adopt all the states
         while chained_dfa.states:
