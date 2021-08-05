@@ -50,14 +50,32 @@ parser {
                         "<title>" -> {wait "</title>";}
                         "<link>" -> {wait "</link>";}
                         "<description>" -> {
-                            ows(); // eat all spaces before message
                             try {
-                                advisory += /\w[^\n\r<>]+/;
+                                loop {
+                                    try {
+                                        case {
+                                            /[^\n\r<>&]/ -> {
+                                                if !($last == ' ' || $last == 9) || advisory.len > 0 {
+                                                    advisory += [$last];
+                                                }
+                                            }
+                                            "&" -> {
+                                                case {
+                                                    "amp;" -> {advisory += ['&'];}
+                                                    "apos;" -> {advisory += [39];}
+                                                    else -> {wait ";";}
+                                                }
+                                            }
+                                        }
+                                    }
+                                    catch (nomatch) {
+                                        break;
+                                    }
+                                }
                             }
                             catch (outofspace) {
                                 // ignore error
                             }
-                            "\n";
                             // TODO: parse "affecting"
                             wait "</description>";
                         }
