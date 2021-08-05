@@ -143,6 +143,8 @@ _math_expr: disjunction_expr
            | "-" math_atom -> negate_expr
 ?math_atom: NUMBER -> math_num
           | IDENTIFIER -> math_var
+          | IDENTIFIER ".len" -> math_str_len
+          | IDENTIFIER "[" _math_expr "]" -> math_str_index
           | CHAR_CONSTANT -> math_char_const
           | BOOL_CONST -> bool_const
           | "$" IDENTIFIER -> builtin_math_var
@@ -237,6 +239,8 @@ all_sum_expr_nodes = [
     "math_num",
     "negate_expr",
     "not_expr",
+    "math_str_len",
+    "math_str_index",
     "math_var",
     "math_char_const",
     "builtin_math_var"
@@ -901,6 +905,7 @@ class ProgramFlag(int, enum.Enum):
     ALLOCATE_STR_SPACE_IN_STRUCT = (5, "Allocate string space in struct", True, (), (6,))  # allocate the string space in the struct as an array, default
     ALLOCATE_STR_SPACE_DYNAMIC   = (6, "Allocate string space dynamically", False, (7,), (5,))  # implies DYNAMIC
     ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND = (8, "Allocate string space on demand", False, (6,))  # implies DYNAMIC
+    UNSAFE_STRING_INDEXING = (18, "Don't perform runtime bounds checks on string indexing")
     # |
     # - Hook options
     HOOK_GLOBAL = (12, "Place hooks as global functions", True)
@@ -1499,8 +1504,8 @@ class ConditionalAction(Action):
                 for act in self.sub_actions[cond]:
                     for potential in act.modifies():
                         for child in cond.expr.all_children():
-                            if isinstance(child, OutIntegerExpr) and child.ref == potential:
-                                ProgramData.imbue(self, DTAG.STRICT_TIMING_REASON, f"expression could change containing conditional outcome")
+                            if potential in child.accesses():
+                                ProgramData.imbue(self, DTAG.STRICT_TIMING_REASON, f"expression could change containing conditional's outcome")
                                 return True
         return any(x.is_timing_strict() for x in itertools.chain(*self.sub_actions.values()))
 
@@ -1637,7 +1642,7 @@ class SetTo(Action, HasDefaultDebugInfo):
         return ActionMode.AT_FINISH
 
     def is_timing_strict(self):
-        return any(isinstance(x, OutIntegerExpr) and x.ref == self.into_storage for x in self.value_expr.all_children())
+        return any(self.into_storage in x.accesses() for x in self.value_expr.all_children())
 
     def debug_lookup(self, tag: DTAG):
         if tag == DTAG.NAME:
@@ -1950,6 +1955,13 @@ class IntegerExpr(abc.ABC):
             children.extend(i.all_children())
         return children
 
+    def accesses(self) -> List["OutputStorage"]:
+        """
+        Return which outputs this expression accesses
+        """
+
+        return []
+
 class LiteralIntegerExpr(IntegerExpr):
     def __init__(self, value, typ: OutputStorageType = OutputStorageType.INT, model_ref: OutputStorage=None):
         self.value = value
@@ -1980,6 +1992,9 @@ class OutIntegerExpr(IntegerExpr):
         if not isinstance(other, OutIntegerExpr): return False
         return other.ref == self.ref
 
+    def accesses(self):
+        return [self.ref]
+
 class StringRefIntegerExpr(IntegerExpr):
     def __init__(self, ref: "OutputStorage", index: IntegerExpr):
         if not ref.holds_a(OutputStorageType.STR):
@@ -1999,6 +2014,29 @@ class StringRefIntegerExpr(IntegerExpr):
     def __eq__(self, other):
         if not isinstance(other, StringRefIntegerExpr): return False
         return self.ref == other.ref and self.index == other.index
+
+    def accesses(self):
+        return [self.ref, *self.index.accesses()]
+
+    def get_child_expressions(self):
+        return [self.index]
+
+class StringLengthIntegerExpr(IntegerExpr):
+    def __init__(self, ref: "OutputStorage"):
+        if not ref.holds_a(OutputStorageType.STR):
+            raise IllegalParseTree("Index expression must be indexing a string", self)
+
+        self.ref = ref
+
+    def __eq__(self, other):
+        if not isinstance(other, StringLengthIntegerExpr): return False
+        return self.ref == other.ref
+
+    def accesses(self):
+        return [self.ref, *self.index.accesses()]
+
+    def result_type(self):
+        return OutputStorageType.INT
 
 class LastCharIntegerExpr(IntegerExpr):
     def result_type(self):
@@ -2044,6 +2082,12 @@ class MathIntegerExpr(IntegerExpr):
 
     def get_child_expressions(self):
         return self.children
+
+    def accesses(self):
+        acc = []
+        for i in self.children:
+            acc.extend(i.accesses())
+        return acc
 
 class SumIntegerExpr(MathIntegerExpr):
     def __init__(self, children: List[IntegerExpr], negate: List[bool]):
@@ -3851,6 +3895,31 @@ class ParseCtx:
                 return ProgramData.imbue(ProgramData.imbue(OutIntegerExpr(out_spec), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
             except KeyError:
                 raise UndefinedReferenceError("output", expr.children[0])
+        elif expr.data in ["math_str_len", "math_str_index"]:
+            # Try to lookup var
+            try:
+                out_spec = self.state_object_spec[expr.children[0].value]
+            except KeyError:
+                try:
+                    target_name = self._lookup_bound_argument(expr.children[0], MacroArgumentKind.OUT).children[0]
+                    out_spec = self.state_object_spec[target_name.value]
+                except UndefinedReferenceError:
+                    raise UndefinedReferenceError("output", expr.children[0])
+                except KeyError:
+                    raise UndefinedReferenceError("output", target_name)
+
+            if not out_spec.holds_a(OutputStorageType.STR):
+                raise IllegalParseTree("Variable must be string", expr.children[0])
+
+            if expr.data == "math_str_len":
+                val = StringLengthIntegerExpr(out_spec)
+            else:
+                val = StringRefIntegerExpr(out_spec, self._parse_integer_expr(expr.children[1]))
+            
+            return ProgramData.imbue(val,
+                    DTAG.SOURCE_LINE, expr.line,
+                    DTAG.SOURCE_COLUMN, expr.column
+            )
         elif expr.data == "builtin_math_var":
             ref = expr.children[0]
             if ref.value == "last":
@@ -3858,9 +3927,9 @@ class ParseCtx:
             else:
                 raise UndefinedReferenceError("builtin math variable", ref)
         elif expr.data == "sum_expr":
-            return SumIntegerExpr([self._parse_integer_expr(x) for x in expr.children[::2]], [False, *(x.value == "-" for x in expr.children[1::2])])
+            return SumIntegerExpr([self._parse_integer_expr(x, into_storage=into_storage) for x in expr.children[::2]], [False, *(x.value == "-" for x in expr.children[1::2])])
         elif expr.data == "mul_expr":
-            return MulIntegerExpr([self._parse_integer_expr(x) for x in expr.children[::2]], [MulIntegerExprOp.MUL, *(MulIntegerExprOp(x.value) for x in expr.children[1::2])])
+            return MulIntegerExpr([self._parse_integer_expr(x, into_storage=into_storage) for x in expr.children[::2]], [MulIntegerExprOp.MUL, *(MulIntegerExprOp(x.value) for x in expr.children[1::2])])
         elif expr.data == "comp_expr":
             left = self._parse_integer_expr(expr.children[0])
             if isinstance(left, OutIntegerExpr):
@@ -3869,9 +3938,9 @@ class ParseCtx:
                 ref = None
             return CompareIntegerExpr(left, self._parse_integer_expr(expr.children[2], into_storage=ref), CompareIntegerExprOp(expr.children[1].value))
         elif expr.data == "conjunction_expr":
-            return ConjunctionIntegerExpr([self._parse_integer_expr(x) for x in expr.children])
+            return ConjunctionIntegerExpr([self._parse_integer_expr(x, into_storage=into_storage) for x in expr.children])
         elif expr.data == "disjunction_expr":
-            return DisjunctionIntegerExpr([self._parse_integer_expr(x) for x in expr.children])
+            return DisjunctionIntegerExpr([self._parse_integer_expr(x, into_storage=into_storage) for x in expr.children])
         elif expr.data == "not_expr":
             return CompareIntegerExpr(self._parse_integer_expr(expr.children[0], into_storage=into_storage), LiteralIntegerExpr(False, OutputStorageType.BOOL), CompareIntegerExprOp.EQ)
         elif expr.data == "negate_expr":
@@ -4531,6 +4600,14 @@ class CodegenCtx:
             return self._convert_literal_value(intexpr)
         elif isinstance(intexpr, OutIntegerExpr):
             return f"state->c.{intexpr.ref.name}"
+        elif isinstance(intexpr, StringLengthIntegerExpr):
+            return f"state->{intexpr.ref.name}_counter";
+        elif isinstance(intexpr, StringRefIntegerExpr):
+            index = self._generate_code_for_int_expr(intexpr.index, ctx)
+            text = f"state->c.{intexpr.ref.name}[{index}]"
+            if ProgramData.do(ProgramFlag.UNSAFE_STRING_INDEXING):
+                return text
+            return f"((({index}) >= 0 && ({index}) < {intexpr.ref.str_size}) ? {text} : 0)"
         elif isinstance(intexpr, LastCharIntegerExpr):
             return f"({self._integer_containing(None)})(inval)" # name of the last character value
         elif isinstance(intexpr, SumIntegerExpr):
@@ -4614,7 +4691,7 @@ class CodegenCtx:
             # Admittedly, this is a little hit or miss, but if they give too long a string it's really their fault so /shrug
             # TODO: customization point to disable this and not put terminating nulls on strings
             result.add(f"if (state->{action.into_storage.name}_counter == {action.into_storage.str_size-1}) {{")
-            ProgramData.imbue(action, DTAG.ACTION_MAY_SKIP, True)
+            ProgramData.imbue(action, DTAG.ACTION_MAY_SKIP, True) # TODO: this should probably be a fallthrough, but there's no way to communicate that.
             with result as body:
                 body.add(f"state->state = {self.dfa.states.index(action.end_target)};")
                 if transition is not None:
