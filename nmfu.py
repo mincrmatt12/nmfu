@@ -137,10 +137,14 @@ _math_expr: disjunction_expr
 ?conjunction_expr: comp_expr ("&&" comp_expr)*
 ?comp_expr: sum_expr (CMP_OP sum_expr)?
 ?sum_expr: mul_expr (SUM_OP mul_expr)*
-?mul_expr: math_atom (MUL_OP math_atom)*
+?mul_expr: math_unary (MUL_OP math_unary)*
+?math_unary: math_atom
+           | "!" math_atom -> not_expr
+           | "-" math_atom -> negate_expr
 ?math_atom: NUMBER -> math_num
           | IDENTIFIER -> math_var
           | CHAR_CONSTANT -> math_char_const
+          | BOOL_CONST -> bool_const
           | "$" IDENTIFIER -> builtin_math_var
           | "(" _math_expr ")"
 
@@ -231,6 +235,8 @@ all_sum_expr_nodes = [
     "sum_expr",
     "mul_expr",
     "math_num",
+    "negate_expr",
+    "not_expr",
     "math_var",
     "math_char_const",
     "builtin_math_var"
@@ -3866,6 +3872,10 @@ class ParseCtx:
             return ConjunctionIntegerExpr([self._parse_integer_expr(x) for x in expr.children])
         elif expr.data == "disjunction_expr":
             return DisjunctionIntegerExpr([self._parse_integer_expr(x) for x in expr.children])
+        elif expr.data == "not_expr":
+            return CompareIntegerExpr(self._parse_integer_expr(expr.children[0], into_storage=into_storage), LiteralIntegerExpr(False, OutputStorageType.BOOL), CompareIntegerExprOp.EQ)
+        elif expr.data == "negate_expr":
+            return SumIntegerExpr([LiteralIntegerExpr(0), self._parse_integer_expr(expr.children[0], into_storage=into_storage)], [True])
         else:
             raise IllegalParseTree("Invalid math expression", expr)
 
