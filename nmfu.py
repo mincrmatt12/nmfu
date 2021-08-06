@@ -939,6 +939,7 @@ class ProgramFlag(int, enum.Enum):
 
     # Debug options
     DEBUG_DFA_HIDE_ERROR_HANDLING = (100, "", True)
+    DEBUG_DFA_BINARY_LABELS = (101, "Show all transition labels as hex points", False)
 
 class ProgramOption(enum.Enum):
     def __init__(self, default, helpstr):
@@ -5380,6 +5381,11 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
             val = repr(condition)
         return graphviz.escape(val)
 
+    def build_label_single(value):
+        if ProgramData.do(ProgramFlag.DEBUG_DFA_BINARY_LABELS) and type(value) in (str, bytes):
+            return f"{ord(value):02x}"
+        else: return repr(value)
+
     def build_label_onvalues(on_values):
         on_values_remaining = list(on_values)
         on_values_remaining.sort(key=lambda x: x if isinstance(x, str) else '')
@@ -5401,7 +5407,7 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
                     for j in range(range_start, range_end+1):
                         used.append(on_values_remaining[j])
                     
-                    label += f"{on_values_remaining[range_start]!r}-{on_values_remaining[range_end]!r},"
+                    label += f"{build_label_single(on_values_remaining[range_start])}-{build_label_single(on_values_remaining[range_end])},"
                 range_start = i
                 range_end = i
 
@@ -5409,13 +5415,13 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
             # this is a valid range
             for j in range(range_start, range_end+1):
                 used.append(on_values_remaining[j])
-            label += f"{on_values_remaining[range_start]!r}-{on_values_remaining[range_end]!r},"
+            label += f"{build_label_single(on_values_remaining[range_start])}-{build_label_single(on_values_remaining[range_end])},"
 
         for x in used:
             on_values_remaining.remove(x)
 
         if on_values_remaining:
-            label += ",".join(repr(x) for x in on_values_remaining)
+            label += ",".join(build_label_single(x) for x in on_values_remaining)
         elif label:
             label = label[:-1]
         label = graphviz.escape(label)
@@ -5479,8 +5485,9 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
                     for tgt in action.get_target_override_targets():
                         if (frozenset([id(action)]), tgt) not in ignored_transitions:
                             g.edge(str(id(state)), str(id(tgt)), label=f"{acname} side effect")
-                if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER]:
+                if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.ALWAYS_GOTO_UNDEFINED]:
                     is_real = False
+                    break
             if is_real:
                 g.edge(str(id(state)), str(id(transition.target)), label=label, style="dashed" if transition.is_fallthrough else "solid")
 
