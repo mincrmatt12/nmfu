@@ -4487,9 +4487,30 @@ class DfaCompileCtx:
         since it would cause an infinite loop
         """
 
+
         for state in self.dfa.states:
             for transition in state.transitions:
-                if transition.target == state and transition.is_fallthrough and not any(x.get_target_override_mode() in [
+                if not transition.is_fallthrough:
+                    continue
+
+                visited = set()
+                def aux(x):
+                    if isinstance(x, DFConditionPoint):
+                        for i in x.transitions:
+                            if i.target in visited:
+                                continue
+                            visited.add(i.target)
+                            aux(i.target)
+                    else:
+                        real_target = x[transition.on_values]
+                        if real_target and real_target.is_fallthrough:
+                            if real_target.target not in visited:
+                                visited.add(real_target.target)
+                                aux(real_target.target)
+                
+                aux(state)
+
+                if state in visited and transition.is_fallthrough and not any(x.get_target_override_mode() in [
                     ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.ALWAYS_GOTO_UNDEFINED] and state not in x.get_target_override_targets() for x in transition.actions):
                     raise IllegalDFAStateError("Infinite loop due to self-referential fallthrough", transition)
         
