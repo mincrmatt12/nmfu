@@ -1,4 +1,4 @@
-out int number;
+out int{unsigned, size 2} number;
 
 parser {
     foreach {

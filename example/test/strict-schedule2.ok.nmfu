@@ -1,0 +1,9 @@
+out str[5] asdf;
+
+parser {
+    "123";
+    optional {
+        /\w+/;
+    }
+    delete asdf;
+}

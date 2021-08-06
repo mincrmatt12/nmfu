@@ -1,0 +1,8 @@
+out raw{uint64_t} unsigned_out;
+
+parser {
+    unsigned_out += /.{8}/;
+    if unsigned_out.len != 8 || unsigned_out[0] == 34 {
+        delete unsigned_out;
+    }
+}

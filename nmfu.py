@@ -63,9 +63,14 @@ out_decl: "out" out_type IDENTIFIER ";"
         | "out" out_type IDENTIFIER "=" atom ";"
 
 out_type: "bool" -> bool_type
-        | "int" -> int_type
+        | "int" ("{" int_attr ("," int_attr)* "}")? -> int_type
         | "enum" "{" IDENTIFIER ("," IDENTIFIER)+ "}" -> enum_type
         | "str" "[" NUMBER "]" -> str_type
+        | "unterminated" "str" "[" NUMBER "]" -> unterm_str_type
+        | "raw" "{" IDENTIFIER "}" -> raw_type
+
+int_attr: SIGNED -> signed_attr
+        | "size" NUMBER -> width_attr
 
 hook_decl: "hook" IDENTIFIER ";"
 
@@ -91,6 +96,7 @@ simple_stmt: expr -> match_stmt
            | IDENTIFIER "+=" expr -> append_stmt
            | IDENTIFIER "(" (expr ("," expr)*)? ")" -> call_stmt
            | "break" IDENTIFIER? -> break_stmt
+           | "delete" IDENTIFIER -> delete_stmt
            | "finish" -> finish_stmt
            | "wait" expr -> wait_stmt
 
@@ -220,6 +226,8 @@ SUM_OP: /[+-]/
 MUL_OP: /[*\/%]/
 CMP_OP: /[!=]=/ | /[<>]=?/
 CHAR_CONSTANT: /'[^'\\]'/ | /'\\.'/
+
+SIGNED: "signed" | "unsigned"
 
 // comments
 
@@ -888,6 +896,7 @@ class ProgramFlag(int, enum.Enum):
     # DFA optimization options (enabled by various levels of -O)
     SIMPLIFY_ELSE_CONDITIONS = 3
     REMOVE_INACCESIBLE_STATES = 4
+    USE_DELETE_FOR_EMPTY_STRING = 20
 
     # Codegen optimization options ('')
     COLLAPSE_TRANSITION_RANGES = (9, "Rewrite large transition values as codepoint range checks")
@@ -906,6 +915,8 @@ class ProgramFlag(int, enum.Enum):
     ALLOCATE_STR_SPACE_DYNAMIC   = (6, "Allocate string space dynamically", False, (7,), (5,))  # implies DYNAMIC
     ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND = (8, "Allocate string space on demand", False, (6,))  # implies DYNAMIC
     UNSAFE_STRING_INDEXING = (18, "Don't perform runtime bounds checks on string indexing")
+    STRINGS_AS_U8 = (19, "Store strings as uint8_t[] arrays instead of char arrays")
+    DELETE_STRING_FREE_MEMORY = (21, "delete-ing a string should also free() it", False, (), (5,))
     # |
     # - Hook options
     HOOK_GLOBAL = (12, "Place hooks as global functions", True)
@@ -961,7 +972,7 @@ class ProgramData:
     _OPTIMIZE_LEVELS = {
         0: (),     # -O0 (nothing)
         1: (ProgramFlag.SIMPLIFY_ELSE_CONDITIONS, ProgramFlag.REMOVE_INACCESIBLE_STATES),       # -O1 (the default)
-        2: (ProgramFlag.COLLAPSE_TRANSITION_RANGES,),     #- O2 (adds to 1, 2)
+        2: (ProgramFlag.COLLAPSE_TRANSITION_RANGES, ProgramFlag.USE_DELETE_FOR_EMPTY_STRING),     #- O2 (adds to 1, 2)
         3: (),
     }
 
@@ -1673,6 +1684,23 @@ class SetToStr(Action, HasDefaultDebugInfo):
     def modifies(self):
         return [self.into_storage]
 
+class DeleteBuf(Action, HasDefaultDebugInfo):
+    def __init__(self, into_storage: "OutputStorage"):
+        self.into_storage = into_storage
+        if not into_storage.holds_buflike():
+            raise IllegalASTStateError("DeleteBuf used without a buflike", self)
+
+    def get_mode(self):
+        return ActionMode.AT_FINISH
+
+    def debug_lookup(self, tag: DTAG):
+        if tag == DTAG.NAME:
+            return "clear {}".format(ProgramData.lookup(self.into_storage, DTAG.NAME))
+
+    def modifies(self):
+        return [self.into_storage]
+
+
 
 class Node(abc.ABC):
     """
@@ -1880,17 +1908,25 @@ class OutputStorageType(enum.Enum):
     INT = 1
     ENUM = 2
     STR = 3
+    RAW = 4
 
 class OutputStorage(HasDefaultDebugInfo):
-    def __init__(self, typ: OutputStorageType, name, default_value=None, enum_values: List[str] = [], str_size=0):
+    def __init__(self, typ: OutputStorageType, name, default_value=None, enum_values: List[str] = [], str_size=0, str_null=True, int_signed=True, int_width=None, raw_underlying=""):
         self.type = typ
         self.name = name
         self.default_value = default_value
         self.enum_values = enum_values
         self.str_size = str_size
+        self.str_null = str_null
+        self.int_signed = int_signed
+        self.int_width = int_width
+        self.raw_underlying = raw_underlying
 
     def holds_a(self, typ):
         return self.type == typ
+
+    def holds_buflike(self):
+        return self.type in [OutputStorageType.STR, OutputStorageType.RAW]
 
     def debug_lookup(self, tag):
         if tag == DTAG.NAME:
@@ -1898,6 +1934,11 @@ class OutputStorage(HasDefaultDebugInfo):
 
     def __repr__(self):
         return f"<OutputStorage name={self.name} type={self.type}>"
+
+    def effective_string_size(self):
+        if self.str_null:
+            return self.str_size - 1
+        return self.str_size
 
 # ==================
 # INTEGER EXPR TYPES
@@ -1997,7 +2038,7 @@ class OutIntegerExpr(IntegerExpr):
 
 class StringRefIntegerExpr(IntegerExpr):
     def __init__(self, ref: "OutputStorage", index: IntegerExpr):
-        if not ref.holds_a(OutputStorageType.STR):
+        if not ref.holds_buflike():
             raise IllegalParseTree("Index expression must be indexing a string", self)
 
         if not index.result_type() == OutputStorageType.INT:
@@ -2023,8 +2064,8 @@ class StringRefIntegerExpr(IntegerExpr):
 
 class StringLengthIntegerExpr(IntegerExpr):
     def __init__(self, ref: "OutputStorage"):
-        if not ref.holds_a(OutputStorageType.STR):
-            raise IllegalParseTree("Index expression must be indexing a string", self)
+        if not ref.holds_buflike():
+            raise IllegalParseTree("Index expression must be indexing a buffer-like object", self)
 
         self.ref = ref
 
@@ -2033,7 +2074,7 @@ class StringLengthIntegerExpr(IntegerExpr):
         return self.ref == other.ref
 
     def accesses(self):
-        return [self.ref, *self.index.accesses()]
+        return [self.ref]
 
     def result_type(self):
         return OutputStorageType.INT
@@ -3856,26 +3897,45 @@ class ParseCtx:
         type_obj = decl.children[0]
         name = decl.children[1].value
         if len(decl.children) == 3:
-            if type_obj.data != "str_type":
+            if type_obj.data not in ["str_type", "unterm_str_type"]:
                 default_value = self._parse_integer_expr(decl.children[2])
                 if not default_value.is_literal():
                     raise IllegalParseTree("Default value for out-decl must be constant", decl.children[2])
+            elif type_obj.data == "raw_type":
+                raise IllegalParseTree("Default values are not allowed for raw types, set them manually if necessary.", decl.children[2])
             else:
-                if decl.children[2].data != "string_const":
+                if decl.children[2].data == "string_const":
+                    default_value = self._convert_string(decl.children[2].children[0].value)
+                elif decl.children[2].data == "binary_string_const":
+                    default_value = self._convert_binary_string(decl.children[2].children[0].value).encode('latin-1')
+                else:
                     raise IllegalParseTree("Default value for string must be a string constant", decl.children[2])
-                default_value = self._convert_string(decl.children[2].children[0].value)
         else:
             default_value = None
 
         if type_obj.data == "bool_type":
             return OutputStorage(OutputStorageType.BOOL, name, default_value=default_value)
         elif type_obj.data == "int_type":
-            return OutputStorage(OutputStorageType.INT, name, default_value=default_value)
+            kwargs = {}
+            for attr in type_obj.children:
+                if attr.data == "signed_attr":
+                    kwargs["int_signed"] = attr.children[0].value == "signed"
+                elif attr.data == "width_attr":
+                    kwargs["int_width"] = int(attr.children[0].value)
+                else:
+                    raise NotImplementedError(attr)
+            return OutputStorage(OutputStorageType.INT, name, default_value=default_value, **kwargs)
         elif type_obj.data == "enum_type":
             return OutputStorage(OutputStorageType.ENUM, name, default_value=default_value, enum_values=list(x.value for
                 x in type_obj.children))
         elif type_obj.data == "str_type":
             return OutputStorage(OutputStorageType.STR, name, default_value=default_value, str_size=int(type_obj.children[0].value))
+        elif type_obj.data == "unterm_str_type":
+            return OutputStorage(OutputStorageType.STR, name, default_value=default_value, str_size=int(type_obj.children[0].value), str_null=False)
+        elif type_obj.data == "raw_type":
+            return OutputStorage(OutputStorageType.RAW, name, raw_underlying=type_obj.children[0].value)
+        else:
+            raise NotImplementedError(type_obj.data)
 
     def _parse_math_expr(self, expr: lark.Tree, into_storage: OutputStorage=None):
         """
@@ -3920,7 +3980,7 @@ class ParseCtx:
                 except KeyError:
                     raise UndefinedReferenceError("output", target_name)
 
-            if not out_spec.holds_a(OutputStorageType.STR):
+            if not out_spec.holds_buflike():
                 raise IllegalParseTree("Variable must be string", expr.children[0])
 
             if expr.data == "math_str_len":
@@ -4074,7 +4134,7 @@ class ParseCtx:
                 raise UndefinedReferenceError("output", stmt.children[0])
         targeted = self.state_object_spec[targeted]
 
-        if targeted.type == OutputStorageType.STR and is_append:
+        if targeted.holds_buflike() and is_append:
             # Handle arguments
             if stmt.children[1].data == "identifier_const":
                 sub_expr = self._lookup_bound_argument(stmt.children[1].children[0], MacroArgumentKind.EXPR)
@@ -4096,8 +4156,13 @@ class ParseCtx:
                 sub_expr = stmt.children[1]
             if sub_expr.data != "string_const":
                 raise IllegalParseTree("String assignment only supports string constants, did you mean +=?", sub_expr)
-            return ActionNode(SetToStr(self._convert_string(sub_expr.children[0].value), targeted))
+            result = self._convert_string(sub_expr.children[0].value)
+            if len(result) == 0 and ProgramData.do(ProgramFlag.USE_DELETE_FOR_EMPTY_STRING):
+                return ActionNode(DeleteBuf(targeted))
+            return ActionNode(SetToStr(result, targeted))
         elif not is_append:
+            if targeted.type == OutputStorageType.RAW:
+                raise IllegalParseTree("Raw types only support append expressions, did you mean +=?", sub_expr)
             return ActionNode(SetTo(self._parse_integer_expr(stmt.children[1], targeted), targeted))
 
     def _parse_case_clause(self, clause: lark.Tree):
@@ -4179,6 +4244,20 @@ class ParseCtx:
             ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.line)
             ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.column)
             return ActionNode(act)
+        elif stmt.data == "delete_stmt":
+            targeted = stmt.children[0].value
+            if targeted not in self.state_object_spec:
+                try:
+                    targeted = self._lookup_bound_argument(stmt.children[0], MacroArgumentKind.OUT).children[0].value
+                except UndefinedReferenceError:
+                    raise UndefinedReferenceError("output", stmt.children[0])
+            targeted = self.state_object_spec[targeted]
+            
+            act = DeleteBuf(targeted)
+            return ProgramData.imbue(ActionNode(act),
+                DTAG.SOURCE_LINE, stmt.line,
+                DTAG.SOURCE_COLUMN, stmt.column
+            )
         elif stmt.data in ("assign_stmt", "append_stmt"):
             return ProgramData.imbue(self._parse_assign_stmt(stmt, stmt.data == "append_stmt"), DTAG.SOURCE_LINE, stmt.line, DTAG.SOURCE_COLUMN, stmt.column)
         elif stmt.data == "case_stmt":
@@ -4475,7 +4554,16 @@ class CodegenCtx:
             result += self._generate_free_implementation()
         return result.value()
 
-    def _integer_containing(self, maxval, signed=True):
+    def _integer_containing(self, maxval=None, signed=True, width=None):
+        if width is not None:
+            maxval = {
+                1: 127,
+                2: 32767,
+                4: 2147483647,
+                8: (1 << 63)-1
+            }.get(width, None)
+            if not signed:
+                maxval += 1
         # TODO: customization point for non 32-bit machines
         if signed:
             if maxval is None:
@@ -4499,6 +4587,24 @@ class CodegenCtx:
                 return "uint32_t"
             else:
                 return "uintmax_t"
+
+    def _get_maxval_hint_for_raw_type(self, typename: str):
+        """
+        Guess the size of an arbitrary c type.
+        """
+
+        return {
+            "int8_t": 1,
+            "uint8_t": 1,
+            "int16_t": 2,
+            "uint16_t": 2,
+            "int32_t": 4,
+            "uint32_t": 4,
+            "int64_t": 8,
+            "uint64_t": 8,
+            "float": 4,
+            "double": 8
+        }.get(typename, None)
 
     def _generate_state_object_decl(self):
         """
@@ -4533,9 +4639,11 @@ class CodegenCtx:
                         out_contents.add(self._get_state_object_out_declaration(out_decl) + ";")
                 contents.add("} c;")
 
-            if any(x.type == OutputStorageType.STR for x in self.state_object_spec):
+            if any(x.holds_buflike() for x in self.state_object_spec):
                 for out_str in (x for x in self.state_object_spec if x.type == OutputStorageType.STR):
                     contents.add(self._integer_containing(out_str.str_size, signed=False), f"{out_str.name}_counter;")
+                for out_raw in (x for x in self.state_object_spec if x.type == OutputStorageType.RAW):
+                    contents.add(self._integer_containing(self._get_maxval_hint_for_raw_type(out_raw.raw_underlying), signed=False), f"{out_raw.name}_counter;")
 
             contents.add(self._integer_containing(len(self.dfa.states), signed=False), "state;")
 
@@ -4552,6 +4660,9 @@ class CodegenCtx:
         result.add(f"typedef struct {self.program_name}_state {self.program_name}_state_t;")
         return result.value()
 
+    def _get_string_char_type(self):
+        return "uint8_t" if ProgramData.do(ProgramFlag.STRINGS_AS_U8) else "char"
+
     def _get_state_object_out_declaration(self, out_decl: OutputStorage):
         """
         Get the type of a state object out decl
@@ -4559,15 +4670,17 @@ class CodegenCtx:
         
         if out_decl.type != OutputStorageType.STR:
             return {
-                OutputStorageType.INT: self._integer_containing(None),
+                OutputStorageType.INT: self._integer_containing(signed=out_decl.int_signed, width=out_decl.int_width),
                 OutputStorageType.ENUM: f"{self.program_name}_out_{out_decl.name}_t",
                 OutputStorageType.BOOL: "bool",
+                OutputStorageType.RAW: out_decl.raw_underlying
             }[out_decl.type] + " " + out_decl.name
         else:
-            if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_IN_STRUCT):
-                return f"char {out_decl.name}[{out_decl.str_size}]"
+            typ = self._get_string_char_type()
+            if not self._is_dynamic(out_decl):
+                return f"{typ} {out_decl.name}[{out_decl.str_size}]"
             else:
-                return f"char * {out_decl.name}"
+                return f"{typ} * {out_decl.name}"
 
     def _generate_out_enum(self, out_decl: OutputStorage):
         """
@@ -4593,8 +4706,25 @@ class CodegenCtx:
             return "true" if literal.get_literal_result() else "false"
         elif literal.result_type() == OutputStorageType.INT:
             return str(literal.get_literal_result())
-        else:
+        elif literal.result_type() == OutputStorageType.STR:
             return '"{}"'.format(self._escape_string(literal.get_literal_result()))
+        else:
+            raise NotImplementedError(literal.result_type())
+
+    def _generate_buflike_index_expr(self, out_expr: OutputStorage, index_expr: str):
+        if out_expr.holds_a(OutputStorageType.RAW):
+            return f"((uint8_t *)state->c.{out_expr.name})[{index_expr}]"
+        else:
+            return f"state->c.{out_expr.name}[{index_expr}]"
+
+    def _generate_buflike_length_expr(self, out_expr: OutputStorage, include_null=False):
+        if out_expr.holds_a(OutputStorageType.RAW):
+            return f"sizeof(state->c.{out_expr.name})"
+        else:
+            if include_null:
+                return str(out_expr.effective_string_size())
+            else:
+                return str(out_expr.str_size)
 
     def _generate_code_for_int_expr(self, intexpr: IntegerExpr, ctx: IntegerExprUseContext, out_expr: OutputStorage=None):
         """
@@ -4616,12 +4746,13 @@ class CodegenCtx:
             return f"state->{intexpr.ref.name}_counter";
         elif isinstance(intexpr, StringRefIntegerExpr):
             index = self._generate_code_for_int_expr(intexpr.index, ctx)
-            text = f"state->c.{intexpr.ref.name}[{index}]"
+            text = self._generate_buflike_index_expr(intexpr.ref, index)
+            size_str = self._generate_buflike_length_expr(intexpr.ref)
             if ProgramData.do(ProgramFlag.UNSAFE_STRING_INDEXING):
                 return text
-            return f"((({index}) >= 0 && ({index}) < {intexpr.ref.str_size}) ? {text} : 0)"
+            return f"((({index}) >= 0 && ({index}) < {size_str}) ? {text} : 0)"
         elif isinstance(intexpr, LastCharIntegerExpr):
-            return f"({self._integer_containing(None)})(inval)" # name of the last character value
+            return f"(inval)" # name of the last character value
         elif isinstance(intexpr, SumIntegerExpr):
             result = f"({self._generate_code_for_int_expr(intexpr.children[0], ctx, out_expr)})"
             for child, operator in zip(intexpr.children[1:], intexpr.negate[1:]):
@@ -4651,9 +4782,12 @@ class CodegenCtx:
         else:
             raise NotImplementedError("unsupported intexpr type", intexpr)
 
-    def _escape_string(self, value: str):
+    def _escape_string(self, value: Union[bytes, str]):
         result = ""
-        bytes_value = value.encode('utf-8')
+        if type(value) is str:
+            bytes_value = value.encode('utf-8')
+        else:
+            bytes_value = value
         for i in bytes_value:
             if chr(i) in ["\\", '"']:
                 result += "\\" + i
@@ -4663,14 +4797,18 @@ class CodegenCtx:
                 result += chr(i)
         return result
 
-    def _generate_set_string(self, value: str, into: OutputStorage):
+    def _generate_set_string(self, value: Union[str], into: OutputStorage):
         """
         Generate code that sets value into into
 
         : strncpy(state->c.into, "value", into.str_size)
+
+        Must ensure value is short enough first.
         """
 
-        return f"strncpy(state->c.{into.name}, \"{self._escape_string(value)}\", {into.str_size});"
+        escaped_length = len(value.encode('utf-8'))
+
+        return f"memcpy(state->c.{into.name}, \"{self._escape_string(value)}\", {escaped_length if not into.str_null else escaped_length+1});"
 
     def _generate_action_implementation(self, action: Action, is_start: bool = False, is_end: bool = False, transition=None):
         result = Outputter()
@@ -4686,6 +4824,7 @@ class CodegenCtx:
             value = self._generate_code_for_int_expr(action.value_expr, ctx, target)
             result.add(f"state->c.{target.name} = {value};")
         elif isinstance(action, SetToStr):
+            assert action.into_storage.holds_a(OutputStorageType.STR)
             # Check if we need to allocate
             if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND) and action.into_storage.default_value is None:  # if it wasn't None it'd be allocated in the start()
                 if is_start:
@@ -4693,16 +4832,32 @@ class CodegenCtx:
                     result.add(f"state->c.{action.into_storage.name} = malloc({action.into_storage.str_size});")
                 else:
                     result.add(f"if (!state->c.{action.into_storage.name}) state->c.{action.into_storage.name} = malloc({action.into_storage.str_size});")
+            if len(action.value_expr) > action.into_storage.effective_string_size():
+                raise IllegalDFAStateError("Literal is too long for output", action)
             result.add(self._generate_set_string(action.value_expr, action.into_storage))
             result.add(f"state->{action.into_storage.name}_counter = {len(action.value_expr)};")
+        elif isinstance(action, DeleteBuf):
+            assert action.into_storage.holds_buflike()
+
+            # free buffer if required
+            if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND) and ProgramData.do(ProgramFlag.DELETE_STRING_FREE_MEMORY) and not is_start and self._is_dynamic(action.into_storage):
+                result.add(f"free(state->c.{action.into_storage.name});")
+                result.add(f"state->c.{action.into_storage.name} = NULL;")
+            else:
+                # if buffer is not freed, ensure strings are made empty
+                if action.into_storage.holds_a(OutputStorageType.STR) and action.into_storage.str_null:
+                    result.add(f"state->c.{action.into_storage.name}[0] = 0;")
+
+            result.add(f"state->{action.into_storage.name}_counter = 0;");
         elif isinstance(action, (AppendTo, AppendCharTo)):
+            assert action.into_storage.holds_buflike()
+            output_length_expr = self._generate_buflike_length_expr(action.into_storage)
             # Check if we need to allocate
-            if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND) and action.into_storage.default_value is None:  # if it wasn't None it'd be allocated in the start()
-                result.add(f"if (!state->c.{action.into_storage.name}) state->c.{action.into_storage.name} = malloc({action.into_storage.str_size});")
-            # We treat the size given in by the user as including a terminating null
-            # Admittedly, this is a little hit or miss, but if they give too long a string it's really their fault so /shrug
-            # TODO: customization point to disable this and not put terminating nulls on strings
-            result.add(f"if (state->{action.into_storage.name}_counter == {action.into_storage.str_size-1}) {{")
+            if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_DYNAMIC_ON_DEMAND) and action.into_storage.default_value is None and self._is_dynamic(action.into_storage):  # if it wasn't None it'd be allocated in the start()
+                result.add(f"if (!state->c.{action.into_storage.name}) state->c.{action.into_storage.name} = malloc({output_length_expr});")
+            # We treat the size given in by the user as including a terminating null (if requested, anyways)
+            max_length_expr = self._generate_buflike_length_expr(action.into_storage, include_null=True)
+            result.add(f"if (state->{action.into_storage.name}_counter == {max_length_expr}) {{")
             ProgramData.imbue(action, DTAG.ACTION_MAY_SKIP, True) # TODO: this should probably be a fallthrough, but there's no way to communicate that.
             with result as body:
                 body.add(f"state->state = {self.dfa.states.index(action.end_target)};")
@@ -4714,8 +4869,12 @@ class CodegenCtx:
                 target_expression = "inval" if isinstance(action, AppendTo) else self._generate_code_for_int_expr(
                     action.append_value, ctx, OutputStorage(OutputStorageType.INT, "$appendctx")
                 )
-                body.add(f"state->c.{action.into_storage.name}[state->{action.into_storage.name}_counter++] = (char)({target_expression});")
-                body.add(f"state->c.{action.into_storage.name}[state->{action.into_storage.name}_counter] = 0;")
+                char_type = self._get_string_char_type()
+                if action.into_storage.holds_a(OutputStorageType.RAW):
+                    char_type = "uint8_t"
+                body.add(f"{self._generate_buflike_index_expr(action.into_storage, f'state->{action.into_storage.name}_counter++')} = ({char_type})({target_expression});")
+                if action.into_storage.holds_a(OutputStorageType.STR) and action.into_storage.str_null:
+                    body.add(f"{self._generate_buflike_index_expr(action.into_storage, f'state->{action.into_storage.name}_counter')} = 0;")
             result.add("}")
         elif isinstance(action, CallHook):
             parm = "0" if is_start else "inval"
@@ -4761,6 +4920,9 @@ class CodegenCtx:
             raise NotImplementedError(action)
         return result.value()
 
+    def _is_dynamic(self, out_expr: OutputStorage):
+        return out_expr.holds_a(OutputStorageType.STR) and ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_DYNAMIC)
+
     def _generate_start_implementation(self):
         result = Outputter()
 
@@ -4771,18 +4933,20 @@ class CodegenCtx:
             # First, any (if specified) default values.
             for out_expr in self.state_object_spec:
                 # If a string, first init the counter value
-                if out_expr.type == OutputStorageType.STR:
+                if out_expr.holds_buflike():
                     counter_val = 0
                     if out_expr.default_value is not None:
+                        assert out_expr.holds_a(OutputStorageType.STR)
                         counter_val = len(out_expr.default_value)
                     contents.add("// initialize append counter for", out_expr.name)
                     contents.add(f"state->{out_expr.name}_counter = {counter_val};")
                 if out_expr.default_value is not None:
                     contents.add("// initialize default for", out_expr.name)
-                    if out_expr.type == OutputStorageType.STR:
+                    if out_expr.holds_buflike():
+                        assert out_expr.holds_a(OutputStorageType.STR)
                         # Also allocate the data if not included
-                        if ProgramData.do(ProgramFlag.ALLOCATE_STR_SPACE_DYNAMIC):
-                            contents.add(f"state->c.{out_expr.name} = malloc({out_expr.str_size});")
+                        if self._is_dynamic(out_expr):
+                            contents.add(f"state->c.{out_expr.name} = malloc({self._generate_buflike_length_expr(out_expr)});")
                         contents.add(self._generate_set_string(out_expr.default_value, out_expr))
                     else:
                         contents.add(f"state->c.{out_expr.name} = {self._generate_code_for_int_expr(out_expr.default_value, IntegerExprUseContext.ASSIGN_INITIAL, out_expr)};")
@@ -5115,6 +5279,7 @@ class CodegenCtx:
                     if out_expr.type == OutputStorageType.STR:
                         contents.add(f"// free storage for {out_expr.name}")
                         contents.add(f"free(state->c.{out_expr.name});")
+                        contents.add(f"state->c.{out_expr.name} = NULL;")
 
         result.add("}")
         return result.value()

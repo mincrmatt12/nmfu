@@ -1,0 +1,16 @@
+// args: -O2 -fallocate-str-space-dynamic-on-demand -fstrings-as-u8 -fdelete-string-free-memory
+
+out unterminated str[32] unterm = "test";
+out str[32] term;
+
+parser {
+    unterm += /(\d\w)|!\d\d/;
+    if $last == '9' {
+        delete unterm;
+    }
+
+    if unterm.len > 0 {
+        term += /\d\d\d[^\n]/;
+        unterm = "";
+    }
+}
