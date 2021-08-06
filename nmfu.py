@@ -3749,6 +3749,8 @@ class IfElseNode(ActionSinkNode, ActionSourceNode):
             raise IllegalASTStateError("Invalid action after if condition", self)
 
         self.after_actions.extend(actions)
+        if self.equivalent_actions:
+            self.equivalent_actions.extend(actions)
 
     def convert(self, current_error_handlers):
         # Generate condition dfa + start node
