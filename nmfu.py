@@ -3491,7 +3491,7 @@ class OptionalNode(ActionSinkNode):
 
         return sub_dfa
 
-class LoopNode(ActionSinkNode):
+class LoopNode(ActionSinkNode, ActionSourceNode):
     def __init__(self, name):
         self.name = name
         self.next = None
@@ -3516,6 +3516,10 @@ class LoopNode(ActionSinkNode):
 
         self.after_break_actions.extend(actions)
 
+    def adopt_actions_from(self):
+        # This will place the loop start actions in the right place for the first iteration. We add them to all iteration transitions too.
+        return self.loop_start_actions, self
+
     def get_break_handler(self):
         return self.break_action
 
@@ -3538,10 +3542,6 @@ class LoopNode(ActionSinkNode):
         # First, create the sub_dfa 
         sub_dfa = self.child_node.convert(current_error_handlers)
 
-        # Attempt to add the loop start actions to the start state
-        for transition in sub_dfa.starting_state.all_transitions():
-            transition.attach(*self.loop_start_actions)
-
         # don't mark it accepting yet
 
         should_try_to_append = False
@@ -3560,15 +3560,20 @@ class LoopNode(ActionSinkNode):
                     if subaction == self.break_action:
                         should_try_to_append = True
 
-        # Verify that the accepting states are all distinct
+        # Verify that the accepting states are all distinct TODO: make this properly do ambiguity resolution
         for accept_state in sub_dfa.accepting_states:
             for transition in accept_state.all_transitions():
                 if transition.target in sub_dfa.accepting_states:
                     raise IllegalDFAStateConflictsError("Ambigious loop: should loop or continue matching", accept_state, transition.target)
 
-        # Replace all transitions that go to the finishing states with transitions that go to the sub_dfa starting state
-        for transition in itertools.chain(*(sub_dfa.transitions_pointing_to(x) for x in sub_dfa.accepting_states)):
-            transition.to(sub_dfa.starting_state)
+        # If there are error-handling transitions on the accept node, point them to the starting node as fallthrough (so that anything that _isn't_ getting matched by 
+        # the last node gets forwarded to the start, looping). If there are no transitions on the final node, point everything to the start.
+        for accept_state in sub_dfa.accepting_states:
+            for trans in accept_state.transitions:
+                if trans.error_handling:
+                    trans.handles_else(False).fallthrough().to(sub_dfa.starting_state).attach(*self.loop_start_actions)
+            if not accept_state.transitions:
+                accept_state[DFTransition.Else] = DFTransition(fallthrough=True).to(sub_dfa.starting_state).attach(*self.loop_start_actions)
 
         for state in sub_dfa.states:
             parent_dfa.add(state)
