@@ -15,7 +15,7 @@ def test_action_node_merge():
 @pytest.mark.parametrize("subtype", [nmfu.DirectMatch, nmfu.CaseDirectMatch])
 def test_direct_matches_action_binding(subtype):
     each_tester = nmfu.AppendTo(None, None)
-    finish_tester = nmfu.BreakAction(None)
+    finish_tester = nmfu.FinishAction()
 
     string = "test"
 
