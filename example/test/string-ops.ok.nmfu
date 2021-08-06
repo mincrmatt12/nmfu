@@ -4,6 +4,7 @@ parser {
     buf += /[a-zA-Z]{2,4}\d+\s*/;
 
     if buf.len > 4 && buf[1] != 'C' {
-        "expected";
+        "e\x56xpected";
+        buf = "ok";
     }
 }
