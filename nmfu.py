@@ -654,14 +654,15 @@ class DFA:
                         use_real = False
                         for tgt in action.get_target_override_targets():
                             aux(tgt)
+                        break
                     elif action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_UNDEFINED:
                         use_real = False
+                        break
                     elif action.get_target_override_mode() == ActionOverrideMode.MAY_GOTO_TARGET:
                         for tgt in action.get_target_override_targets():
                             aux(tgt)
                     else:
                         continue
-                    break
                 if use_real:
                     aux(t.target)
 
