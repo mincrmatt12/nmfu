@@ -3515,7 +3515,7 @@ class LoopNode(ActionSinkNode):
 
     def set_child(self, child: Node):
         if isinstance(child, ActionSourceNode):
-            self.after_break_actions, child = child.adopt_actions_from()
+            self.loop_start_actions, child = child.adopt_actions_from()
         self.child_node = child
 
     def convert(self, current_error_handlers):
