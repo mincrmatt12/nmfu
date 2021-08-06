@@ -4217,7 +4217,7 @@ class ParseCtx:
         elif expr.data == "concat_expr":
             return ConcatMatch(list(self._parse_match_expr(x) for x in expr.children))
         elif expr.data == "identifier_const":
-            return self._parse_match_expr(self._lookup_named_entity(expr.children[0], MacroArgumentKind.EXPR))
+            return self._parse_match_expr(self._lookup_named_entity(MacroArgumentKind.EXPR, expr.children[0]))
         else:
             raise IllegalParseTree("Invalid expression in match expression context", expr)
 
