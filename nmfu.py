@@ -219,7 +219,7 @@ REGEX_BYTE: /[0-9a-fA-F]{2}/
 SUM_OP: /[+-]/
 MUL_OP: /[*\/%]/
 CMP_OP: /[!=]=/ | /[<>]=?/
-CHAR_CONSTANT: /'.'/
+CHAR_CONSTANT: /'[^'\\]'/ | /'\\.'/
 
 // comments
 
@@ -3791,6 +3791,18 @@ class ParseCtx:
             parsed_args.append(MacroArgument(name, kind))
         return parsed_args
 
+    def _convert_char_const(self, char_const: str):
+        if len(char_const) == 3:
+            return char_const[1]
+        else:
+            return {
+                'n': '\n',
+                'r': '\r',
+                't': '\t',
+                'b': '\b',
+                '\'': '\''
+            }.get(char_const[2], char_const[2])
+
     def _convert_string(self, escaped_string: str):
         """
         Parse the string `escaped_string`, which is the direct token from lark (still with quotes and escapes)
@@ -3873,7 +3885,7 @@ class ParseCtx:
         if expr.data == "math_num":
             return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(int(expr.children[0].value)), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
         elif expr.data == "math_char_const":
-            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(ord(expr.children[0].value[1])), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
+            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(ord(self._convert_char_const(expr.children[0].value))), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
         elif expr.data == "math_var":
             # Try to handle enums too
             if into_storage is not None and into_storage.type == OutputStorageType.ENUM and expr.children[0].value in into_storage.enum_values:
@@ -3963,7 +3975,7 @@ class ParseCtx:
             ProgramData.imbue(val, DTAG.SOURCE_COLUMN, expr.children[0].column)
             return val
         elif expr.data == "char_const":
-            val = LiteralIntegerExpr(ord(expr.children[0].value[1]))
+            val = LiteralIntegerExpr(ord(self._convert_char_const(expr.children[0].value)))
             ProgramData.imbue(val, DTAG.SOURCE_LINE, expr.children[0].line)
             ProgramData.imbue(val, DTAG.SOURCE_COLUMN, expr.children[0].column)
             return val

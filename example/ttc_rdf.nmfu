@@ -55,14 +55,19 @@ parser {
                                     try {
                                         case {
                                             /[^\n\r<>&]/ -> {
-                                                if !($last == ' ' || $last == 9) || advisory.len > 0 {
-                                                    advisory += [$last];
+                                                if !($last == ' ' || $last == '\t') || advisory.len > 0 {
+                                                    if $last == '\t' {
+                                                        advisory += [' '];
+                                                    }
+                                                    else {
+                                                        advisory += [$last];
+                                                    }
                                                 }
                                             }
                                             "&" -> {
                                                 case {
                                                     "amp;" -> {advisory += ['&'];}
-                                                    "apos;" -> {advisory += [39];}
+                                                    "apos;" -> {advisory += ['\''];}
                                                     else -> {wait ";";}
                                                 }
                                             }
