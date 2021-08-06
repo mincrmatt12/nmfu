@@ -1497,7 +1497,7 @@ class Action:
             children.extend(i.all_subactions())
         return children
 
-class ConditionalAction(Action):
+class ConditionalAction(Action, HasDefaultDebugInfo):
     """
     Implements an entire if-else node chain
     """
@@ -1510,6 +1510,10 @@ class ConditionalAction(Action):
             ProgramData.imbue(cond, DTAG.PARENT, self)
             for act in acts:
                 ProgramData.imbue(act, DTAG.PARENT, cond)
+
+    def debug_lookup(self, tag):
+        if tag == DTAG.NAME:
+            return "if action"
 
     def get_mode(self):
         mode = None
