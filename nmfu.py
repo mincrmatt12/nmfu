@@ -140,8 +140,13 @@ atom: BOOL_CONST -> bool_const
 _math_expr: disjunction_expr
 
 ?disjunction_expr: conjunction_expr ("||" conjunction_expr)*
-?conjunction_expr: comp_expr ("&&" comp_expr)*
-?comp_expr: sum_expr (CMP_OP sum_expr)?
+?conjunction_expr: bit_or_expr ("&&" bit_or_expr)*
+?bit_or_expr: bit_xor_expr ("|" bit_xor_expr)*
+?bit_xor_expr: bit_and_expr ("^" bit_and_expr)*
+?bit_and_expr: comp_expr ("&" comp_expr)*
+?comp_expr: shift_expr (CMP_OP shift_expr)?
+// nmfu does not allow (1 << 2 << 3) because that is dumb
+?shift_expr: sum_expr (SHIFT_OP sum_expr)?
 ?sum_expr: mul_expr (SUM_OP mul_expr)*
 ?mul_expr: math_unary (MUL_OP math_unary)*
 ?math_unary: math_atom
@@ -226,6 +231,7 @@ SUM_OP: /[+-]/
 MUL_OP: /[*\/%]/
 CMP_OP: /[!=]=/ | /[<>]=?/
 CHAR_CONSTANT: /'[^'\\]'/ | /'\\.'/
+SHIFT_OP: "<<" | ">>" 
 
 SIGNED: "signed" | "unsigned"
 
@@ -247,6 +253,10 @@ all_sum_expr_nodes = [
     "math_num",
     "negate_expr",
     "not_expr",
+    "shift_expr",
+    "bit_or_expr",
+    "bit_xor_expr",
+    "bit_and_expr",
     "math_str_len",
     "math_str_index",
     "math_var",
@@ -2212,6 +2222,53 @@ class CompareIntegerExpr(MathIntegerExpr):
         else:
             return False
 
+class BitShiftIntegerExpr(MathIntegerExpr):
+    def __init__(self, left: IntegerExpr, right: IntegerExpr, towards_left: bool):
+        super().__init__([left, right])
+        self.left = left
+        self.right = right
+        self.towards_left = towards_left
+
+    def __eq__(self, other):
+        if not isinstance(other, BitShiftIntegerExpr): return False
+        return self.left == other.left and self.right == other.right and self.towards_left == other.towards_left
+
+    def get_literal_result(self):
+        left = self.left.get_literal_result()
+        right = self.right.get_literal_result()
+
+        if self.towards_left:
+            return left << right
+        else:
+            return left >> right
+
+class BitwiseIntegerExprOp(enum.Enum):
+    OR = "|"
+    XOR = "^"
+    AND = "&"
+
+class BitwiseIntegerExpr(MathIntegerExpr):
+    def __init__(self, children: List[IntegerExpr], operation: BitwiseIntegerExprOp):
+        super().__init__(children)
+        self.op = operation
+
+    def __eq__(self, other):
+        if not isinstance(other, BitwiseIntegerExpr): return False
+        return self.children == other.children and self.op == other.op
+
+    def get_literal_result(self):
+        total = self.children[0].get_literal_result()
+
+        for child in self.children[1:]:
+            if self.op == BitwiseIntegerExprOp.OR:
+                total |= child.get_literal_result()
+            elif self.op == BitwiseIntegerExprOp.XOR:
+                total ^= child.get_literal_result()
+            else:
+                total &= child.get_literal_result()
+
+        return total
+
 class DisjunctionIntegerExpr(MathIntegerExpr):
     def __init__(self, children):
         super().__init__(children, valid_type=OutputStorageType.BOOL)
@@ -4009,6 +4066,15 @@ class ParseCtx:
             else:
                 ref = None
             return CompareIntegerExpr(left, self._parse_integer_expr(expr.children[2], into_storage=ref), CompareIntegerExprOp(expr.children[1].value))
+        elif expr.data == "shift_expr":
+            return BitShiftIntegerExpr(self._parse_integer_expr(expr.children[0], into_storage=into_storage), self._parse_integer_expr(expr.children[2], into_storage=into_storage), expr.children[1].value == "<<")
+        elif expr.data in ["bit_or_expr", "bit_xor_expr", "bit_and_expr"]:
+            op = {
+                "bit_or_expr": BitwiseIntegerExprOp.OR,
+                "bit_xor_expr": BitwiseIntegerExprOp.XOR,
+                "bit_and_expr": BitwiseIntegerExprOp.AND,
+            }[expr.data]
+            return BitwiseIntegerExpr([self._parse_integer_expr(x, into_storage=into_storage) for x in expr.children], op)
         elif expr.data == "conjunction_expr":
             return ConjunctionIntegerExpr([self._parse_integer_expr(x, into_storage=into_storage) for x in expr.children])
         elif expr.data == "disjunction_expr":
@@ -4779,6 +4845,16 @@ class CodegenCtx:
                 result += " "
                 result += f"({self._generate_code_for_int_expr(child, ctx, out_expr)})"
             return result
+        elif isinstance(intexpr, BitwiseIntegerExpr):
+            result = f"({self._generate_code_for_int_expr(intexpr.children[0], ctx, out_expr)})"
+            for child in intexpr.children[1:]:
+                result += " "
+                result += intexpr.op.value
+                result += " "
+                result += f"({self._generate_code_for_int_expr(child, ctx, out_expr)})"
+            return result
+        elif isinstance(intexpr, BitShiftIntegerExpr):
+            return f"({self._generate_code_for_int_expr(intexpr.left, ctx, out_expr)}) {'<<' if intexpr.towards_left else '>>'} ({self._generate_code_for_int_expr(intexpr.right, ctx, out_expr)})"
         else:
             raise NotImplementedError("unsupported intexpr type", intexpr)
 

@@ -1,0 +1,6 @@
+out int test;
+
+parser {
+    /\d/;
+    test = [(test << 3) | test ^ 4 & $last];
+}
