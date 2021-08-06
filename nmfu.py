@@ -3694,7 +3694,7 @@ class ForeachNode(ActionSinkNode, ActionSourceNode):
         ignored_targets = set(current_error_handlers.values())
         for state in sub_dfa.states:
             for transition in state.all_transitions():
-                if transition.target in ignored_targets:
+                if transition.target in ignored_targets or transition.is_fallthrough:
                     continue
                 transition.attach(*self.each_actions, prepend=True)
 
