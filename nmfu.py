@@ -4109,7 +4109,7 @@ class ParseCtx:
         elif expr.data == "not_expr":
             return CompareIntegerExpr(self._parse_integer_expr(expr.children[0], into_storage=into_storage), LiteralIntegerExpr(False, OutputStorageType.BOOL), CompareIntegerExprOp.EQ)
         elif expr.data == "negate_expr":
-            return SumIntegerExpr([LiteralIntegerExpr(0), self._parse_integer_expr(expr.children[0], into_storage=into_storage)], [True])
+            return SumIntegerExpr([LiteralIntegerExpr(0), self._parse_integer_expr(expr.children[0], into_storage=into_storage)], [False, True])
         else:
             raise IllegalParseTree("Invalid math expression", expr)
 
