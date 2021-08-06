@@ -1,0 +1,9 @@
+out str[16] buf;
+
+parser {
+    buf += /[a-zA-Z]{2,4}\d+\s*/;
+
+    if buf.len > 4 && buf[1] != 'C' {
+        "expected";
+    }
+}
