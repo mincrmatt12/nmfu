@@ -4537,8 +4537,6 @@ class DfaCompileCtx:
         # Count all transitions
         ignore_map_counter = Counter()
         for transition in self.dfa.all_transitions():
-            if transition.is_fallthrough:
-                continue
             ignore_map_counter[(frozenset(transition.on_values), transition.target)] += 1
 
         mod = 0
