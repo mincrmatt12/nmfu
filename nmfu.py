@@ -424,6 +424,31 @@ class DFState:
             if len(set(i.on_values) & set(on_values)):
                 yield i
 
+    def compute_foreign_else_definition(self, other_state: "DFState") -> Set:
+        r"""
+        Given two states
+
+           (self) -(a,b,c)-> ...
+             \-----(ELSE)-> ...       
+
+        and
+
+           (other) ---(a)-> ...
+             \-----(ELSE)-> ...
+
+        it should be clear that the specific meaning of ELSE differs on both.
+
+        This function returns a (potentially super-)set of the symbols which ELSE
+        on a _foreign_ state (like "other") will match on this state.
+        """
+
+        our_alphabet = self.local_alphabet()
+        their_alphabet = other_state.local_alphabet()
+
+        local_else_additions = our_alphabet - their_alphabet
+        local_else_additions.add(DFTransition.Else)
+        return local_else_additions
+
     def __setitem__(self, key, data):
         if type(key) in (tuple, list, set, frozenset):
             on_values = key
@@ -775,7 +800,6 @@ class DFA:
         chained_transitions = [x for x in chained_dfa.starting_state.transitions if DFTransition.Else in x.on_values]
         chained_transitions.extend(x for x in chained_dfa.starting_state.transitions if DFTransition.Else not in x.on_values)
 
-        chained_local_alphabet = chained_dfa.starting_state.local_alphabet()
         valid_replacers = set()
 
         for transition in chained_transitions:
@@ -789,7 +813,7 @@ class DFA:
             # matter too much.
 
             sub_local_alphabet = sub_state.local_alphabet()
-            local_else_additions = sub_local_alphabet - chained_local_alphabet
+            local_else_meaning = sub_state.compute_foreign_else_definition(chained_dfa.starting_state)
 
             culled_chained_transitions = []
 
@@ -798,7 +822,7 @@ class DFA:
 
                 relevant_values = set(transition.on_values)
                 if DFTransition.Else in relevant_values:
-                    relevant_values.update(local_else_additions)
+                    relevant_values.update(local_else_meaning)
                 target = sub_state[relevant_values]
                 if target is None:
                     targets = set()
