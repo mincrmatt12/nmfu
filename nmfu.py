@@ -927,9 +927,10 @@ class ProgramFlag(int, enum.Enum):
 
     # Optimization flags, set in ProgramData
     # DFA optimization options (enabled by various levels of -O)
-    SIMPLIFY_ELSE_CONDITIONS = 3
-    REMOVE_INACCESIBLE_STATES = 4
-    USE_DELETE_FOR_EMPTY_STRING = 20
+    SIMPLIFY_ELSE_CONDITIONS = 300
+    REMOVE_INACCESIBLE_STATES = 301
+    USE_DELETE_FOR_EMPTY_STRING = 302
+    SHORTCIRCUIT_FALLTHROUGHS = 303
 
     # Codegen optimization options ('')
     COLLAPSE_TRANSITION_RANGES = (9, "Rewrite large transition values as codepoint range checks")
@@ -969,6 +970,8 @@ class ProgramOption(enum.Enum):
         self.helpstr = helpstr
 
     # DFA optimization options
+    MAX_SHORTCIRCUIT_FALLTHROUGH = (20, "Maximum number of equivalent fallthrough transitions to inline")
+    MAX_SHORTCIRCUIT_ACTION_PENALTY = (3, "How much actions affect the max shortcircuit falloff amount")
 
     # Codegen options
     COLLAPSED_RANGE_LENGTH = (4, "Minimum length of range to collapse into range comparison")
@@ -1007,7 +1010,7 @@ class ProgramData:
         0: (),     # -O0 (nothing)
         1: (ProgramFlag.SIMPLIFY_ELSE_CONDITIONS, ProgramFlag.REMOVE_INACCESIBLE_STATES),       # -O1 (the default)
         2: (ProgramFlag.COLLAPSE_TRANSITION_RANGES, ProgramFlag.USE_DELETE_FOR_EMPTY_STRING),     #- O2 (adds to 1, 2)
-        3: (),
+        3: (ProgramFlag.SHORTCIRCUIT_FALLTHROUGHS,),
     }
 
     @classmethod
@@ -4512,18 +4515,116 @@ class DfaCompileCtx:
         dprint[ProgramFlag.VERBOSE_OPTIMIZE_RESULTS]("simplified {} transitions".format(mod))
         return mod
 
+    def _optimize_shortcircuit_fallthroughs(self):
+        """
+        Simplify fallthrough transitions such as:
+
+        a -=-=-> b -<h>-> c
+
+        to just
+
+        a --<h>-->c
+
+        by following all transitions pointing at fallthrough transitions. We also impose a limit such that if a transition to be shortcircuited is referred to by enough
+        other states (and has at least one action) we won't replace it.
+
+        Currently, we don't handle action side effect since there's no good way to retarget those right now.
+        """
+
+        if not ProgramData.do(ProgramFlag.SHORTCIRCUIT_FALLTHROUGHS):
+            return 0
+
+        # Count all transitions
+        ignore_map_counter = Counter()
+        for transition in self.dfa.all_transitions():
+            if transition.is_fallthrough:
+                continue
+            ignore_map_counter[(frozenset(transition.on_values), transition.target)] += 1
+
+        mod = 0
+
+        all_transitions = list(self.dfa.all_transitions(include_states=True))
+
+        for orig_state, transition in all_transitions:
+            if not transition.is_fallthrough:
+                continue
+
+            # Check if the target has a matching fallthrough
+            if isinstance(transition.target, DFConditionPoint): continue
+
+            effective = set(transition.on_values)
+            if DFTransition.Else in transition.on_values:
+                effective.update(transition.target.compute_foreign_else_definition(orig_state))
+
+            next_target = transition.target[effective]
+
+            if next_target is None or next_target.is_fallthrough:
+                continue
+
+            # Are there actions? If so, does this violate the threshold
+            if len(next_target.actions) > 0:
+                max_count = ProgramData.option(ProgramOption.MAX_SHORTCIRCUIT_FALLTHROUGH) - ProgramData.option(ProgramOption.MAX_SHORTCIRCUIT_ACTION_PENALTY)*(len(next_target.actions)-1)
+                if ignore_map_counter[(frozenset(next_target.on_values), next_target.target)] > max_count:
+                    continue
+
+            # Shortcircuit the transition
+            if next_target.error_handling:
+                transition.handles_else()
+
+            transition.attach(*next_target.actions)
+            transition.to(next_target.target)
+            transition.fallthrough(False)
+
+            mod += 1
+
+        dprint[ProgramFlag.VERBOSE_OPTIMIZE_RESULTS]("shortcircuited {} transitions".format(mod))
+
+        mod2 = 0
+
+        # Now, we'll try to remove "dummy states" -- ones that _only_ have an Else fallthrough on them.
+        all_transitions = list(self.dfa.all_transitions(include_states=True))
+        for orig_state, transition in all_transitions:
+            if transition.is_fallthrough: continue
+
+            if isinstance(transition.target, DFConditionPoint): continue
+
+            if len(transition.target.transitions) != 1 or DFTransition.Else not in transition.target.transitions[0].on_values:
+                continue
+
+            to_replace = transition.target.transitions[0]
+
+            if not to_replace.is_fallthrough:
+                continue
+
+            if len(to_replace.actions) > 0:
+                max_count = ProgramData.option(ProgramOption.MAX_SHORTCIRCUIT_FALLTHROUGH) - ProgramData.option(ProgramOption.MAX_SHORTCIRCUIT_ACTION_PENALTY)*(len(to_replace.actions)-1)
+                if ignore_map_counter[(frozenset(to_replace.on_values), to_replace.target)] > max_count:
+                    continue
+
+            # Shortcircuit the transition
+            if to_replace.error_handling:
+                transition.handles_else()
+
+            transition.attach(*to_replace.actions)
+            transition.to(to_replace.target)
+
+            mod2 += 1
+
+        dprint[ProgramFlag.VERBOSE_OPTIMIZE_RESULTS]("removed {} dummy transitions".format(mod2))
+        return mod + mod2
+
     def _verify_fallthrough_loop(self):
         """
         Check if any transitions pointing to their own state are fallthrough, which is invalid
         since it would cause an infinite loop
         """
 
-
         for state in self.dfa.states:
             for transition in state.transitions:
                 if not transition.is_fallthrough:
                     continue
 
+                # TODO: this should really be extracted into a method
                 visited = set()
                 def aux(x):
                     if isinstance(x, DFConditionPoint):
@@ -4554,7 +4655,7 @@ class DfaCompileCtx:
         self.dfa = self.ast.convert(defaultdict(lambda: self.generic_fail_state))
         self.dfa.add(self.generic_fail_state)
 
-        while self._optimize_remove_inaccessible() + self._optimize_simplify_transition_matches():
+        while self._optimize_remove_inaccessible() + self._optimize_simplify_transition_matches() + self._optimize_shortcircuit_fallthroughs():
             pass
 
         # verify correctness of DFA
