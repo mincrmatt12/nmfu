@@ -7,6 +7,8 @@ import glob
 import os.path
 import pytest
 import shlex
+import shutil
+import subprocess
 
 # get list of examples
 
@@ -16,12 +18,22 @@ example_flag_combos = [
     ("-O2", "-finclude-user-ptr"),
     ("-O2", "-fallocate-str-space-dynamic-on-demand"),
     ("-O2", "-fallocate-str-space-dynamic-on-demand", "-fhook-per-state"),
-    ("-O2", "--collapsed-range-length", "6", "-fno-use-cplusplus-guard")
+    ("-O2", "--collapsed-range-length", "6", "-fno-use-cplusplus-guard"),
+    ("-O2", "-fallocate-str-space-dynamic-on-demand", "-fstrings-as-u8", "-fdelete-string-free-memory", "-findirect-start-ptr", "-fstrict-done-token-generation")
 ]
+
+# check if we can find gcc or clang
+compiler = None
+for potential in ["gcc", "clang", "cc"]:
+    path = shutil.which(potential)
+    if path is not None:
+        compiler = path
+        break
 
 @pytest.mark.parametrize("filename", example_files)
 @pytest.mark.parametrize("options", example_flag_combos)
-def test_full_integration(filename, options):
+@pytest.mark.skipif(compiler is None, reason="no c compiler found")
+def test_full_integration(filename, options, tmpdir):
     # Effectively just run NMFU
 
     with open(filename) as f:
@@ -38,11 +50,16 @@ def test_full_integration(filename, options):
     dctx = nmfu.DfaCompileCtx(pctx)
     dctx.compile()
 
-    cctx = nmfu.CodegenCtx(dctx, "fake_test")
-    cctx.generate_header()
-    cctx.generate_source()
-    
-    # yay
+    os.chdir(tmpdir)
+
+    cctx = nmfu.CodegenCtx(dctx, "undertest")
+    with open("undertest.h", "w") as f:
+        f.write(cctx.generate_header())
+    with open("undertest.c", "w") as f:
+        f.write(cctx.generate_source())
+
+    # Try to compile
+    subprocess.run([compiler, "-c", "undertest.c", "-Wall", "-Werror", "-Wno-unused-label"], check=True)
 
 def test_param_conflicts():
     with pytest.raises(RuntimeError, match="Conflict between"):

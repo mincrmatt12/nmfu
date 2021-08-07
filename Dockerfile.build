@@ -1,5 +1,6 @@
 FROM python:3
 
+RUN apt-get update && apt-get install gcc -y --no-install-recommends
 RUN pip install twine
 
 WORKDIR /data
