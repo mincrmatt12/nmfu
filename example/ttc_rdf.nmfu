@@ -51,6 +51,9 @@ parser {
                         "<link>" -> {wait "</link>";}
                         "<description>" -> {
                             try {
+                                optional {
+                                    /[\n\r]+/;
+                                }
                                 loop {
                                     try {
                                         case {
