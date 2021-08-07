@@ -89,6 +89,7 @@ def test_dfa_transition_accessors():
     dfa.add(s3)
 
     assert dfa.error_handling_transitions() == {s1["a"]}
+    assert dfa.error_handling_transitions(include_states=True) == {(s1, s1["a"])}
     assert dfa.transitions_that_do(ch) == {s2["c"]}
     assert dfa.transitions_pointing_to(s2, include_states=True) == {(s1, s1["b"]), (s2, s2["c"])}
 

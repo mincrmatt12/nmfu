@@ -1,0 +1,19 @@
+// ok: 123hiooflioasdf 
+
+out int int1;
+out int int2;
+
+hook hi;
+
+macro test1(out out2, match words) {
+    out2 = 0;
+    foreach {
+        words;
+    } do {
+        out2 = [out2 * 10 + ($last - '0')];
+    }
+}
+
+parser {
+    test1(int1, [int1]);
+}

@@ -15,6 +15,7 @@ import subprocess
 example_files = glob.glob(os.path.join(os.path.dirname(__file__), "../example/*.nmfu"))
 example_flag_combos = [
     ("-O3",),
+    ("-O0",),
     ("-O2", "-finclude-user-ptr"),
     ("-O2", "-fallocate-str-space-dynamic-on-demand"),
     ("-O2", "-fallocate-str-space-dynamic-on-demand", "-fhook-per-state"),
@@ -60,10 +61,6 @@ def test_full_integration(filename, options, tmpdir):
 
     # Try to compile
     subprocess.run([compiler, "-c", "undertest.c", "-Wall", "-Werror", "-Wno-unused-label"], check=True)
-
-def test_param_conflicts():
-    with pytest.raises(RuntimeError, match="Conflict between"):
-        nmfu.ProgramData.load_commandline_flags(("-fallocate-str-space-in-struct", "-fallocate-str-space-dynamic", "dummy"))
 
 example_files_ok   = glob.glob(os.path.join(os.path.dirname(__file__), "../example/test/*.ok.nmfu"))
 example_files_fail = glob.glob(os.path.join(os.path.dirname(__file__), "../example/test/*.fail.nmfu"))
@@ -134,7 +131,3 @@ def test_fail(filename):
         common_run_int_test(pt)
 
     str(e.value)  # ensure error string generation is tested
-
-def test_help_doesnt_crash():
-    nmfu.ProgramData._print_help()
-    nmfu.ProgramData._print_help(show_all=True)

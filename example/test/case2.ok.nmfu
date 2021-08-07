@@ -11,6 +11,7 @@ parser {
         }
         else -> {
             wait "\r\n";
+            "e";
         }
     }
     finish;

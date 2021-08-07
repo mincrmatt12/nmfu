@@ -661,8 +661,6 @@ class DFA:
                     elif action.get_target_override_mode() == ActionOverrideMode.MAY_GOTO_TARGET:
                         for tgt in action.get_target_override_targets():
                             aux(tgt)
-                    else:
-                        continue
                 if use_real:
                     aux(t.target)
 
@@ -822,7 +820,7 @@ class DFA:
                         if sub_state[j] is not None and not sub_state[j].error_handling:
                             relevant_values.remove(j)
                 elif not all(x.error_handling or x.target == transition.target for x in targets):
-                    if ProgramData.dump(DebugDumpable.DFA) and ProgramData.do(ProgramFlag.VERBOSE_AMBIG_ERRORS):
+                    if ProgramData.dump(DebugDumpable.DFA) and ProgramData.do(ProgramFlag.VERBOSE_AMBIG_ERRORS): # pragma: no-cover
                         debug_dump_dfa(self, "ae_dfa2", highlight=sub_state)
                         debug_dump_dfa(chained_dfa, "ae_dfa1")
                     dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("TT", transition)
@@ -956,7 +954,7 @@ class ProgramOption(enum.Enum):
     DEBUG_GRAPH_DUMP_FORMAT = ("pdf", "Output format for graphviz dumpers, use 'dot' to get raw dot file")
 
 class HasDefaultDebugInfo:
-    def debug_lookup(self, tag: DTAG):
+    def debug_lookup(self, tag: DTAG): # pragma: no-cover
         return None
 
 class DebugDumpable(enum.Enum):
@@ -1058,7 +1056,7 @@ class ProgramData:
         return -1
 
     @classmethod
-    def _print_version(cls): # pragma: no cover
+    def _print_version(cls): 
         print("nmfu", __version__)
         print("Copyright (C) 2020-2021 Matthew Mirvish")
         print("This is free software; see the source for copying conditions.  There is NO")
@@ -1129,6 +1127,8 @@ class ProgramData:
                 x: x.default for x in ProgramOption
         }
         cls._dump = []
+        cls.dry_run = False
+        cls.dump_prefix = None
 
     @classmethod
     def load_commandline_flags(cls, all_cmd_options: List[str]):
@@ -1295,7 +1295,7 @@ class dprint(metaclass=IndexableInstance):
         self.condition = condition
 
     def __call__(self, *args, **kwargs):
-        if ProgramData.do(self.condition):
+        if ProgramData.do(self.condition): # pragma: no-cover
             print(*args, **kwargs)
 
 
@@ -1729,7 +1729,7 @@ class Node(abc.ABC):
     """
 
     @abc.abstractmethod
-    def set_next(self, next_node: "Node"):
+    def set_next(self, next_node: "Node"):  # pragma: no-cover
         """
         Set the next node that follows this node.
         _MUST_ be called before convert _UNLESS_ there is no next node
@@ -1738,7 +1738,7 @@ class Node(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def get_next(self) -> "Node":
+    def get_next(self) -> "Node":  # pragma: no-cover
         """
         Get the next node
         """
@@ -1749,7 +1749,7 @@ class Node(abc.ABC):
         return None
 
 class ActionSourceNode:
-    def adopt_actions_from(self) -> Tuple[List[Action], Node]:
+    def adopt_actions_from(self) -> Tuple[List[Action], Node]:  # pragma: no-cover
         """
         Adopt the actions from this node, returning the actions that should be adopted and
         the new node which should be used instead of this node. If adopting is _not_ destructive,
@@ -1796,14 +1796,14 @@ class ActionSinkNode(Node):
     """
 
     @abc.abstractmethod
-    def _set_next(self, actual_next_node: Node):
+    def _set_next(self, actual_next_node: Node):  # pragma: no-cover
         """
         Called by our set_next when the next node is not an action type
         """
         pass
 
     @abc.abstractmethod
-    def _adopt_actions(self, actions: List[Action]):
+    def _adopt_actions(self, actions: List[Action]):  # pragma: no-cover
         pass
 
     def set_next(self, next_node):
@@ -1828,7 +1828,7 @@ class Match(abc.ABC):
         self.char_actions = []
 
     @abc.abstractmethod
-    def convert(self, current_error_handlers: dict) -> DFA:
+    def convert(self, current_error_handlers: dict) -> DFA:  # pragma: no-cover
         return None
 
     def attach(self, action: Action):
@@ -1973,7 +1973,7 @@ class IntegerExprUseContext(enum.Enum):
 
 class IntegerExpr(abc.ABC):
     @abc.abstractmethod
-    def result_type(self) -> OutputStorageType:
+    def result_type(self) -> OutputStorageType:  # pragma: no-cover
         """
         Get the result type of this expression (integer expression technically corresponds to 
         bool/int/enum
@@ -1986,7 +1986,7 @@ class IntegerExpr(abc.ABC):
         """
         return False
 
-    def get_literal_result(self):
+    def get_literal_result(self):  # pragma: no-cover
         """
         Evaluate to a native python representation
         """
