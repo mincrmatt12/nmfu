@@ -29,6 +29,7 @@ import io
 import textwrap
 import os
 import sys
+import weakref
 try:
     import lark
 except ImportError: # pragma: no cover
@@ -989,10 +990,12 @@ class DebugDumpable(enum.Enum):
     DFA = "dfa"
     TRACEBACK = "traceback"
     PARSE = "parse"
+    DTREE = "dtree"
 
 class ProgramData:
     _collection = defaultdict(dict)
     _children = defaultdict(list)
+    _refmap = {}
     _current_source = []
     _flags = {
             x: x.default for x in ProgramFlag
@@ -1022,20 +1025,55 @@ class ProgramData:
         cls._current_source = src.splitlines(keepends=False)
 
     @classmethod
+    def _ensure_refmapped(cls, obj: object):
+        if id(obj) not in cls._refmap:
+            cls._refmap[id(obj)] = weakref.ref(obj)
+        else:
+            if cls._refmap[id(obj)]() is not obj:
+                cls._refmap[id(obj)] = weakref.ref(obj)
+                cls._children[id(obj)] = []
+                cls._collection[id(obj)] = {}
+
+    @classmethod
     def imbue(cls, obj: object, tag: DTAG, value: object, *extra_tags):
         """
         Imbue this object with this debug information
         """
 
+        cls._ensure_refmapped(obj)
+
+        bad = False
+
         if tag == DTAG.PARENT:
-            ProgramData._children[id(value.__repr__.__self__)].append(obj)
-        ProgramData._collection[id(obj)][tag] = value
+            cls._ensure_refmapped(value)
+            # Ensure this node is not trying to mark itself as a parent
+            if obj is value:
+                if cls.do(ProgramFlag.DEBUG_STRICT_PROGRAM_DATA_ERRORS):
+                    raise NMFUError([obj], "Attempt to set object as its own parent")
+                else:
+                    bad = True
+            else:
+                par = cls.lookup(value, DTAG.PARENT)
+                while par is not None:
+                    if par is obj:
+                        if cls.do(ProgramFlag.DEBUG_STRICT_PROGRAM_DATA_ERRORS):
+                            raise NMFUError([obj, par, value], "Attempt to set object as its own parent")
+                        else:
+                            bad = True
+                        break
+                    par = cls.lookup(par, DTAG.PARENT)
+
+            if not bad:
+                cls._children[id(value.__repr__.__self__)].append(id(obj))
+
+        if not bad:
+            cls._collection[id(obj)][tag] = value
         if extra_tags:
             return cls.imbue(obj, *extra_tags)
         return obj
 
     @classmethod
-    def lookup(cls, obj: object, tag: DTAG, recurse_upwards=True, default=None):
+    def lookup(cls, obj: object, tag: DTAG, recurse_upwards=True, default=None, recurse_downwards=True):
         """
         Find the imbued object's data, or -- if none exists -- find it's parents
         """
@@ -1050,6 +1088,11 @@ class ProgramData:
 
         id_obj = id(obj) if type(obj) is not int else obj
 
+        # Ensure consistency
+        if type(obj) is int and obj in cls._refmap and cls._refmap[obj]() is None:
+            del cls._refmap[id_obj]
+            cls._collection[id_obj] = {}
+
         if tag not in ProgramData._collection[id_obj]:
             if DTAG.PARENT in ProgramData._collection[id_obj] and recurse_upwards:
                 val = cls.lookup(ProgramData._collection[id_obj][DTAG.PARENT], tag)
@@ -1059,7 +1102,13 @@ class ProgramData:
                 val = obj.debug_lookup(tag)
                 if val is not None:
                     return val
-            if tag in (DTAG.SOURCE_COLUMN, DTAG.SOURCE_LINE):
+            elif isinstance(obj, int) and id_obj in cls._refmap:
+                v_obj = cls._refmap[id_obj]()
+                if isinstance(v_obj, HasDefaultDebugInfo):
+                    val = v_obj.debug_lookup(tag)
+                    if val is not None:
+                        return val
+            if tag in (DTAG.SOURCE_COLUMN, DTAG.SOURCE_LINE) and recurse_downwards:
                 for i in cls._children[id_obj]:
                     val = cls.lookup(i, tag, recurse_upwards=False)
                     if val is not None:
@@ -1156,6 +1205,12 @@ class ProgramData:
         cls._dump = []
         cls.dry_run = False
         cls.dump_prefix = None
+        del cls._collection
+        del cls._children
+        del cls._refmap
+        cls._collection = defaultdict(dict)
+        cls._children = defaultdict(list)
+        cls._refmap = {}
 
     @classmethod
     def load_commandline_flags(cls, all_cmd_options: List[str]):
@@ -1331,8 +1386,9 @@ class dprint(metaclass=IndexableInstance):
 # ===========
 
 class NMFUError(Exception):
-    def __init__(self, reasons):
+    def __init__(self, reasons, message=None):
         self.reasons = reasons
+        self.message = message
 
     @classmethod
     def _generate_whitespace_marker(cls, line, column):
@@ -1380,6 +1436,8 @@ class NMFUError(Exception):
             return ""
 
     def __str__(self):
+        if self.message:
+            return self.message + " " + self._get_message()
         return self._get_message()
 
 class IllegalASTStateError(NMFUError):
