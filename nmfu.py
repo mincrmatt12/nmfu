@@ -1767,6 +1767,8 @@ class SetTo(Action, HasDefaultDebugInfo):
             else:
                 return "set into {}".format(ProgramData.lookup(self.into_storage, DTAG.NAME))
         elif tag == DTAG.STRICT_TIMING_REASON:
+            if not self.is_timing_strict():
+                return None
             return "expression depends on previous stored value"
 
     def modifies(self):
