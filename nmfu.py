@@ -964,6 +964,8 @@ class ProgramFlag(int, enum.Enum):
     # Debug options
     DEBUG_DFA_HIDE_ERROR_HANDLING = (100, "", True)
     DEBUG_DFA_BINARY_LABELS = (101, "Show all transition labels as hex points", False)
+    DEBUG_STRICT_PROGRAM_DATA_ERRORS = (102, "Throw an error if the ProgramData tree is updated in an invalid way", False)
+    DEBUG_DTREE_HIDE_GC = (103, "Don't show entries in dtree if they've been garbage collected", True)
 
 class ProgramOption(enum.Enum):
     def __init__(self, default, helpstr):
@@ -5971,6 +5973,59 @@ def debug_dump_regextree(rx, indent=0): # pragma: no cover
         lprint("optional")
         debug_dump_regextree(rx.sub_match, indent=indent+1)
 
+def debug_dump_datatree(v: object, indent=0, disallow=None, target=sys.stdout): # pragma: no cover
+    if v is None:
+        for key in ProgramData._children.copy():
+            if ProgramData.lookup(key, DTAG.PARENT, recurse_upwards=False) is None:
+                if ProgramData.do(ProgramFlag.DEBUG_DTREE_HIDE_GC) and (key not in ProgramData._refmap or ProgramData._refmap[key]() is None):
+                    continue
+                debug_dump_datatree(key, target=target)
+        return
+
+    def lprint(*args, **kwargs):
+        nonlocal indent, target
+
+        if target is None:
+            return
+
+        print(" "*indent, end="", file=target)
+        print(*args, **kwargs, file=target)
+
+    if disallow is not None:
+        if v in disallow or id(v) in disallow:
+            lprint("<recerr>")
+            return
+        disallow = [*disallow, v]
+    else:
+        disallow = [v]
+
+    if type(v) is int and v in ProgramData._refmap and ProgramData._refmap[v]() is not None:
+        v = ProgramData._refmap[v]()
+
+    name = ProgramData.lookup(v, DTAG.NAME, recurse_upwards=False)
+    if name is None:
+        if type(v) is int:
+            if ProgramData.do(ProgramFlag.DEBUG_DTREE_HIDE_GC):
+                lprint("<gcd>")
+                return
+            lprint("<unk>")
+        else:
+            lprint(repr(v))
+    else:
+        lprint(f"{name} ({v!r})")
+
+    if type(v) is not int:
+        v = id(v)
+
+    for tag in DTAG:
+        if tag in (DTAG.PARENT, DTAG.NAME): continue
+        aux = ProgramData.lookup(v, tag, recurse_upwards=False, recurse_downwards=False)
+        if aux is not None:
+            lprint(f" {tag}: {aux}")
+
+    for i in ProgramData._children[v]:
+        debug_dump_datatree(i, indent+2, disallow, target=target)
+
 def main(): # pragma: no cover
     try:
         input_file, program_name = ProgramData.load_commandline_flags(sys.argv[1:])
@@ -6020,6 +6075,7 @@ def main(): # pragma: no cover
 
     if ProgramData.dump(DebugDumpable.DFA): debug_dump_dfa(dctx.dfa, ProgramData.dump_prefix + ".dfa")
     if ProgramData.dry_run:
+        if ProgramData.dump(DebugDumpable.DTREE): debug_dump_datatree(None)
         print("... dry run, skipping code generation")
         exit(0)
 
@@ -6033,6 +6089,8 @@ def main(): # pragma: no cover
         else:
             print("Codegen error:", str(e), file=sys.stderr)
             exit(5)
+
+    if ProgramData.dump(DebugDumpable.DTREE): debug_dump_datatree(None)
 
     with open(program_name + ".h", "w") as f:
         f.write(header)

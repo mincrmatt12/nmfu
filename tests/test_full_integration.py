@@ -14,7 +14,7 @@ import subprocess
 
 example_files = glob.glob(os.path.join(os.path.dirname(__file__), "../example/*.nmfu"))
 example_flag_combos = [
-    ("-O3",),
+    ("-O3", "-fno-debug-dtree-hide-gc"),
     ("-O0",),
     ("-O2", "-finclude-user-ptr"),
     ("-O2", "-fallocate-str-space-dynamic-on-demand"),
@@ -22,6 +22,8 @@ example_flag_combos = [
     ("-O2", "--collapsed-range-length", "6", "-fno-use-cplusplus-guard"),
     ("-O2", "-fallocate-str-space-dynamic-on-demand", "-fstrings-as-u8", "-fdelete-string-free-memory", "-findirect-start-ptr", "-fstrict-done-token-generation")
 ]
+
+common_flags = ["-fdebug-strict-program-data-errors"]
 
 # check if we can find gcc or clang
 compiler = None
@@ -39,8 +41,8 @@ def test_full_integration(filename, options, tmpdir):
 
     with open(filename) as f:
         source = f.read()
-        
-    nmfu.ProgramData.load_commandline_flags((*options, filename))
+
+    nmfu.ProgramData.load_commandline_flags((*options, *common_flags, filename))
     nmfu.ProgramData.load_source(source)
 
     pt = nmfu.parser.parse(source, start="start")
@@ -59,6 +61,9 @@ def test_full_integration(filename, options, tmpdir):
     with open("undertest.c", "w") as f:
         f.write(cctx.generate_source())
 
+    # Check if debug dumper works
+    nmfu.debug_dump_datatree(None, target=None)
+
     # Try to compile
     subprocess.run([compiler, "-c", "undertest.c", "-Wall", "-Werror", "-Wno-unused-label"], check=True)
 
@@ -76,6 +81,8 @@ def common_parse_int_test(filename):
         args.append(filename)
     else:
         args = ("-O3", filename)
+
+    args = (*args, *common_flags)
 
     nmfu.ProgramData.load_commandline_flags(args)
     nmfu.ProgramData.load_source(source)
