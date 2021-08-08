@@ -1,0 +1,10 @@
+out int dec = 123;
+out int hex = -0x123;
+out int bin = 0b0010;
+
+parser {
+    "ok";
+    dec = -123;
+    hex = 0x567;
+    bin = 0b0001;
+}

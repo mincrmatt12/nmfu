@@ -66,8 +66,8 @@ out_decl: "out" out_type IDENTIFIER ";"
 out_type: "bool" -> bool_type
         | "int" ("{" int_attr ("," int_attr)* "}")? -> int_type
         | "enum" "{" IDENTIFIER ("," IDENTIFIER)+ "}" -> enum_type
-        | "str" "[" NUMBER "]" -> str_type
-        | "unterminated" "str" "[" NUMBER "]" -> unterm_str_type
+        | "str" "[" RADIX_NUMBER "]" -> str_type
+        | "unterminated" "str" "[" RADIX_NUMBER "]" -> unterm_str_type
         | "raw" "{" IDENTIFIER "}" -> raw_type
 
 int_attr: SIGNED -> signed_attr
@@ -131,7 +131,7 @@ catch_options: "(" CATCH_OPTION ("," CATCH_OPTION)* ")"
      | "[" _math_expr "]"
 
 atom: BOOL_CONST -> bool_const
-    | NUMBER -> number_const
+    | RADIX_NUMBER -> number_const
     | CHAR_CONSTANT -> char_const
     | STRING "i" -> string_case_const
     | STRING "b" -> binary_string_const
@@ -153,7 +153,7 @@ _math_expr: disjunction_expr
 ?math_unary: math_atom
            | "!" math_atom -> not_expr
            | "-" math_atom -> negate_expr
-?math_atom: NUMBER -> math_num
+?math_atom: RADIX_NUMBER -> math_num
           | IDENTIFIER -> math_var
           | IDENTIFIER ".len" -> math_str_len
           | IDENTIFIER "[" _math_expr "]" -> math_str_index
@@ -217,6 +217,11 @@ CATCH_OPTION: /nomatch|outofspace/
 
 %import common.CNAME -> IDENTIFIER
 %import common.SIGNED_INT -> NUMBER
+%import common.HEXDIGIT
+
+HEX_NUMBER: ["+"|"-"] "0x" HEXDIGIT+
+BIN_NUMBER: "0b" ["0"|"1"]+
+RADIX_NUMBER: HEX_NUMBER | BIN_NUMBER | NUMBER
 
 STRING: /"(?:[^"\\]|\\.)*"/
 
@@ -4044,6 +4049,21 @@ class ParseCtx:
                 '\'': '\''
             }.get(char_const[2], char_const[2])
 
+    def _convert_int(self, text: str):
+        sign = 1
+        if text[0] == "+":
+            text = text[1:]
+        elif text[0] == "-":
+            sign = -1
+            text = text[1:]
+
+        if text[0:2] == "0x":
+            return sign * int(text[2:], base=16)
+        elif text[0:2] == "0b":
+            return sign * int(text[2:], base=2)
+        else:
+            return sign * int(text)
+
     def _convert_string(self, escaped_string: str):
         """
         Parse the string `escaped_string`, which is the direct token from lark (still with quotes and escapes)
@@ -4082,6 +4102,10 @@ class ParseCtx:
         """
 
         contents = [x for x in binary_string[1:-1] if x in string.hexdigits]
+        
+        if len(contents) % 2 != 0:
+            raise ValueError("binary literal must have even number of characters")
+
         result = ""
 
         for word in zip(contents[::2], contents[1::2]):
@@ -4107,7 +4131,10 @@ class ParseCtx:
                 if decl.children[2].data == "string_const":
                     default_value = self._convert_string(decl.children[2].children[0].value)
                 elif decl.children[2].data == "binary_string_const":
-                    default_value = self._convert_binary_string(decl.children[2].children[0].value).encode('latin-1')
+                    try:
+                        default_value = self._convert_binary_string(decl.children[2].children[0].value).encode('latin-1')
+                    except ValueError as e:
+                        raise IllegalParseTree(e.args[0], decl.children[2].children[0])
                 else:
                     raise IllegalParseTree("Default value for string must be a string constant", decl.children[2])
         else:
@@ -4129,9 +4156,9 @@ class ParseCtx:
             return OutputStorage(OutputStorageType.ENUM, name, default_value=default_value, enum_values=list(x.value for
                 x in type_obj.children))
         elif type_obj.data == "str_type":
-            return OutputStorage(OutputStorageType.STR, name, default_value=default_value, str_size=int(type_obj.children[0].value))
+            return OutputStorage(OutputStorageType.STR, name, default_value=default_value, str_size=self._convert_int(type_obj.children[0].value))
         elif type_obj.data == "unterm_str_type":
-            return OutputStorage(OutputStorageType.STR, name, default_value=default_value, str_size=int(type_obj.children[0].value), str_null=False)
+            return OutputStorage(OutputStorageType.STR, name, default_value=default_value, str_size=self._convert_int(type_obj.children[0].value), str_null=False)
         elif type_obj.data == "raw_type":
             return OutputStorage(OutputStorageType.RAW, name, raw_underlying=type_obj.children[0].value)
         else:
@@ -4143,7 +4170,7 @@ class ParseCtx:
         """
 
         if expr.data == "math_num":
-            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(int(expr.children[0].value)), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
+            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(self._convert_int(expr.children[0].value)), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
         elif expr.data == "math_char_const":
             return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(ord(self._convert_char_const(expr.children[0].value))), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
         elif expr.data == "math_var":
@@ -4219,7 +4246,7 @@ class ParseCtx:
             raise IllegalParseTree("String-typed value encountered for integer-typed expression", expr)
 
         if expr.data == "number_const":
-            val = LiteralIntegerExpr(int(expr.children[0].value))
+            val = LiteralIntegerExpr(self._convert_int(expr.children[0].value))
             ProgramData.imbue(val, DTAG.SOURCE_LINE, expr.children[0].line)
             ProgramData.imbue(val, DTAG.SOURCE_COLUMN, expr.children[0].column)
             return val
@@ -4275,7 +4302,10 @@ class ParseCtx:
             if expr.data == "string_const":
                 match = DirectMatch(self._convert_string(actual_content.value))
             else:
-                match = DirectMatch(self._convert_binary_string(actual_content.value))
+                try:
+                    match = DirectMatch(self._convert_binary_string(actual_content.value))
+                except ValueError as e:
+                    raise IllegalParseTree(e.args[0], actual_content)
                 ProgramData.imbue(match, DTAG.NAME, f"binary match {expr.children[0].value}")
             ProgramData.imbue(match, DTAG.SOURCE_LINE, actual_content.line)
             ProgramData.imbue(match, DTAG.SOURCE_COLUMN, actual_content.column)
