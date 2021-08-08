@@ -529,11 +529,11 @@ class DFConditionPoint(DFState):
         # TODO: conflicts
         self.transitions.append(transition)
 
-    def __getitem__(self, key): # pragma: no-cover
+    def __getitem__(self, key): # pragma: no cover
         raise NotImplementedError()
-    def __delitem__(self, key): # pragma: no-cover
+    def __delitem__(self, key): # pragma: no cover
         raise NotImplementedError()
-    def __setitem__(self, key): # pragma: no-cover
+    def __setitem__(self, key): # pragma: no cover
         raise NotImplementedError()
 
     def equivalent_on_values(self):
@@ -844,7 +844,7 @@ class DFA:
                         if sub_state[j] is not None and not sub_state[j].error_handling:
                             relevant_values.remove(j)
                 elif not all(x.error_handling or x.target == transition.target for x in targets):
-                    if ProgramData.dump(DebugDumpable.DFA) and ProgramData.do(ProgramFlag.VERBOSE_AMBIG_ERRORS): # pragma: no-cover
+                    if ProgramData.dump(DebugDumpable.DFA) and ProgramData.do(ProgramFlag.VERBOSE_AMBIG_ERRORS): # pragma: no cover
                         debug_dump_dfa(self, "ae_dfa2", highlight=sub_state)
                         debug_dump_dfa(chained_dfa, "ae_dfa1")
                     dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("TT", transition)
@@ -981,7 +981,7 @@ class ProgramOption(enum.Enum):
     DEBUG_GRAPH_DUMP_FORMAT = ("pdf", "Output format for graphviz dumpers, use 'dot' to get raw dot file")
 
 class HasDefaultDebugInfo:
-    def debug_lookup(self, tag: DTAG): # pragma: no-cover
+    def debug_lookup(self, tag: DTAG): # pragma: no cover
         return None
 
 class DebugDumpable(enum.Enum):
@@ -1322,7 +1322,7 @@ class dprint(metaclass=IndexableInstance):
         self.condition = condition
 
     def __call__(self, *args, **kwargs):
-        if ProgramData.do(self.condition): # pragma: no-cover
+        if ProgramData.do(self.condition): # pragma: no cover
             print(*args, **kwargs)
 
 
@@ -1756,7 +1756,7 @@ class Node(abc.ABC):
     """
 
     @abc.abstractmethod
-    def set_next(self, next_node: "Node"):  # pragma: no-cover
+    def set_next(self, next_node: "Node"):  # pragma: no cover
         """
         Set the next node that follows this node.
         _MUST_ be called before convert _UNLESS_ there is no next node
@@ -1765,7 +1765,7 @@ class Node(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def get_next(self) -> "Node":  # pragma: no-cover
+    def get_next(self) -> "Node":  # pragma: no cover
         """
         Get the next node
         """
@@ -1776,7 +1776,7 @@ class Node(abc.ABC):
         return None
 
 class ActionSourceNode:
-    def adopt_actions_from(self) -> Tuple[List[Action], Node]:  # pragma: no-cover
+    def adopt_actions_from(self) -> Tuple[List[Action], Node]:  # pragma: no cover
         """
         Adopt the actions from this node, returning the actions that should be adopted and
         the new node which should be used instead of this node. If adopting is _not_ destructive,
@@ -1823,14 +1823,14 @@ class ActionSinkNode(Node):
     """
 
     @abc.abstractmethod
-    def _set_next(self, actual_next_node: Node):  # pragma: no-cover
+    def _set_next(self, actual_next_node: Node):  # pragma: no cover
         """
         Called by our set_next when the next node is not an action type
         """
         pass
 
     @abc.abstractmethod
-    def _adopt_actions(self, actions: List[Action]):  # pragma: no-cover
+    def _adopt_actions(self, actions: List[Action]):  # pragma: no cover
         pass
 
     def set_next(self, next_node):
@@ -1855,7 +1855,7 @@ class Match(abc.ABC):
         self.char_actions = []
 
     @abc.abstractmethod
-    def convert(self, current_error_handlers: dict) -> DFA:  # pragma: no-cover
+    def convert(self, current_error_handlers: dict) -> DFA:  # pragma: no cover
         return None
 
     def attach(self, action: Action):
@@ -2000,7 +2000,7 @@ class IntegerExprUseContext(enum.Enum):
 
 class IntegerExpr(abc.ABC):
     @abc.abstractmethod
-    def result_type(self) -> OutputStorageType:  # pragma: no-cover
+    def result_type(self) -> OutputStorageType:  # pragma: no cover
         """
         Get the result type of this expression (integer expression technically corresponds to 
         bool/int/enum
@@ -2013,7 +2013,7 @@ class IntegerExpr(abc.ABC):
         """
         return False
 
-    def get_literal_result(self):  # pragma: no-cover
+    def get_literal_result(self):  # pragma: no cover
         """
         Evaluate to a native python representation
         """
