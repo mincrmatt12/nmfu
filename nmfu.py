@@ -4091,7 +4091,8 @@ class ParseCtx:
                         't': '\t',
                         'b': '\b',
                         '0': '\x00',
-                        '"': '"'
+                        '"': '"',
+                        '\\': '\\'
                     }[contents[i]]
                     i += 1
         return result
