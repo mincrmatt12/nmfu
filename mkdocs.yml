@@ -1,0 +1,10 @@
+site_name: nmfu
+theme: readthedocs
+
+nav:
+  - Home: 'index.md'
+  - Tutorial: 'tutorial.md'
+  - 'User Reference':
+    - 'Parser Specification': 'user-ref/parser.md'
+    - 'Generated Code': 'user-ref/generated-code.md'
+    - 'Command Line Options': 'user-ref/cli.md'
