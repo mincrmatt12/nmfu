@@ -3,8 +3,13 @@ theme: readthedocs
 
 nav:
   - Home: 'index.md'
-  - Tutorial: 'tutorial.md'
+  - Tutorials:
+    - 'Simple HTTP': 'tutorial/http1.md'
+    - 'Simple HTTP, continued': 'tutorial/http2.md'
   - 'User Reference':
     - 'Parser Specification': 'user-ref/parser.md'
     - 'Generated Code': 'user-ref/generated-code.md'
     - 'Command Line Options': 'user-ref/cli.md'
+
+markdown_extensions:
+  - admonition

@@ -131,6 +131,7 @@ simple_stmt: expr -> match_stmt
            | IDENTIFIER "+=" expr -> append_stmt
            | IDENTIFIER "(" (expr ("," expr)*)? ")" -> call_stmt
            | "break" IDENTIFIER? -> break_stmt
+           | "delete" IDENTIFIER -> delete_stmt
            | "finish" -> finish_stmt
            | "wait" expr -> wait_stmt
 ```
@@ -141,7 +142,9 @@ The next two statements are the _assign-statement_ and _append_statement_. The _
 and assigns its result into the named _output-variable_. The _append-statement_ instead appends whatever is matched by the _match-expression_ into the named _output-variable_ which must by a string type. Additionally,
 if the argument to an _append-statement_ is a _math-expression_, then the result of evaluating the expression will be treated as a character code and appended to the string.
 
-The _call-stmt_ instantiates a macro or calls a hook. Note that there is currently no valid way to pass parameters to a hook, and as such the expressions provided
+The _delete-statement_ resets a string or raw-typed _output-variable_ to an empty state.
+
+The _call-statement_ instantiates a macro or calls a hook. Note that there is currently no valid way to pass parameters to a hook, and as such the expressions provided
 in that case will be ignored. Macro arguments are always parsed as generic expressions and then interpreted according to the type given to them at declaration.
 
 If a hook and macro have the same name, the macro will take priority. Priority is undefined if a macro argument and global hook or macro share a name.
@@ -166,20 +169,23 @@ A _match-expression_ is anything that can consume input to the parser and check 
 ```lark
 ?expr: atom // string match
      | regex // not an atom to simplify things
+     | binary_regex
      | "end" -> end_expr
      | "(" expr+ ")" -> concat_expr
 
 atom: STRING "i" -> string_case_const
+    | STRING "b" -> binary_string_const
     | STRING -> string_const
 ```
 
-The simplest form of _match-expression_ is the _direct-match_, which matches a literal string. It can optionally match with case insensitivity by suffixing the literal string with an "i".
+The simplest form of _match-expression_ is the _direct-match_, which matches a literal string. It can optionally match with case insensitivity by suffixing the literal string with an "i",
+and can match binary data with the "b" suffix -- see the section on binary matches.
 
 The _end-match-expression_ is a match expression which only matches the end of input.
 
 The _concat-expression_ matches any number of _match-expressions_ in order.
 
-The _regex-expression_ matches a subset of regexes. The quirks of the regex dialect NMFU uses can be found in a later section.
+The _regex-expression_ and _binary-regex-expression_ matches a subset of regexes. The quirks of the regex dialect NMFU uses can be found in a later section.
 
 Additionally, the name of a macro argument of type `match` can replace any _match-expression_, including the sub-expressions inside _concat-expressions_.
 
@@ -190,28 +196,58 @@ An _integer-expression_ is anything that can be directly assigned to an output v
      | "[" sum_expr "]"
 
 atom: BOOL_CONST -> bool_const
-    | NUMBER -> number_const
+    | RADIX_NUMBER -> number_const
     | CHAR_CONSTANT -> char_const
     | STRING -> string_const
     | IDENTIFIER -> enum_const
+
+RADIX_NUMBER: HEX_NUMBER | BIN_NUMBER | NUMBER
 ```
 
-The only two kinds of _integer-expressions_ are _literal-expressions_, which are just literal strings, integers, character constants
+The only two kinds of _integer-expressions_ are _literal-expressions_, which are just literal strings, integers (with support for binary and hexadecimal modes), character constants
 (which behave as they do in C, just becoming integers), enumeration constants (which are resolved based on the context and which _output-variable_ is being assigned) and booleans ("true"/"false"); and _math-expressions_, which are surrounded in square brackets:
 
 ```lark
+_math_expr: disjunction_expr
+
+?disjunction_expr: conjunction_expr ("||" conjunction_expr)*
+?conjunction_expr: bit_or_expr ("&&" bit_or_expr)*
+?bit_or_expr: bit_xor_expr ("|" bit_xor_expr)*
+?bit_xor_expr: bit_and_expr ("^" bit_and_expr)*
+?bit_and_expr: comp_expr ("&" comp_expr)*
+?comp_expr: shift_expr (CMP_OP shift_expr)?
+// nmfu does not allow (1 << 2 << 3) because that is dumb
+?shift_expr: sum_expr (SHIFT_OP sum_expr)?
 ?sum_expr: mul_expr (SUM_OP mul_expr)*
-?mul_expr: math_atom (MUL_OP math_atom)*
-?math_atom: NUMBER -> math_num
+?mul_expr: math_unary (MUL_OP math_unary)*
+?math_unary: math_atom
+           | "!" math_atom -> not_expr
+           | "-" math_atom -> negate_expr
+?math_atom: RADIX_NUMBER -> math_num
           | IDENTIFIER -> math_var
+          | IDENTIFIER ".len" -> math_str_len
+          | IDENTIFIER "[" _math_expr "]" -> math_str_index
           | CHAR_CONSTANT -> math_char_const
+          | BOOL_CONST -> bool_const
           | "$" IDENTIFIER -> builtin_math_var
-          | "(" sum_expr ")"
+          | "(" _math_expr ")"
+
+SUM_OP: /[+-]/
+MUL_OP: /[*\/%]/
+CMP_OP: /[!=]=/ | /[<>]=?/
+CHAR_CONSTANT: /'[^'\\]'/ | /'\\.'/
+SHIFT_OP: "<<" | ">>" 
 ```
 
-(named `sum_expr` in the grammar)
+(named `_math_expr` in the grammar)
 
-_math-expressions_ are effectively any arithmetic with either normal numbers, or references to _output-variables_ (referencing their current value) or _builtin-math-variables_.
+_math-expressions_ support most of the expressions in C, including bit manipulation and comparisons. They operate on a few atomic values:
+
+- Literals (as above)
+- References to the current value of _output-variables_
+- The currents size of a string/raw-typed _output-variable_
+- Specific byte positions inside string/raw-typed _output-variables_ (which by default are runtime range-checked)
+- Or, a _builtin-math-variable_:
 
 The current list of _builtin-math-variables_ is:
 
@@ -223,6 +259,8 @@ For example:
 
 ```
 content_length = [content_length * 10 + ($last - '0')];
+into = [into | (($last & 127) << (7 * varint_counter))];
+[!($last == ' ' || $last == '\t') || advisory.len > 0];
 ```
 
 Additionally, the name of a macro argument of type `expr` can replace any _integer-expression_. Priority versus _output-variable_ names is undefined.
@@ -237,6 +275,7 @@ block_stmt: "loop" IDENTIFIER? "{" statement+ "}" -> loop_stmt
           | "optional" "{" statement+ "}" -> optional_stmt
           | "try" "{" statement+ "}" catch_block -> try_stmt
           | "foreach" "{" statement+ "}" "do" "{" foreach_actions "}" -> foreach_stmt
+          | "if" if_condition ("elif" if_condition)* else_condition? -> if_stmt
 
 catch_block: "catch" catch_options? "{" statement* "}"
 
@@ -245,6 +284,9 @@ case_predicate: "else" -> else_predicate
               | expr -> expr_predicate
 
 catch_options: "(" CATCH_OPTION ("," CATCH_OPTION)* ")" 
+
+if_condition: _math_expr "{" statement+ "}"
+else_condition: "else" "{" statement+ "}"
 
 CATCH_OPTION: /nomatch|outofspace/
 ```
@@ -306,6 +348,45 @@ foreach {
 which will read a number in base 10 and store it into a variable. It accomplishes this by executing `number = [number * 10 + ($last - '0')];` for each digit. Only
 statements which do _not_ consume any input themselves are allowed in the `do` section of a _foreach-statement_. 
 
+_if-statements_ allow you to execute statements conditional on things not necessarily directly related to the input. Conditions are _math-expressions_ without
+the parentheses that must evaluate to either a boolean or an integer (in which case anything other than 0 is truthy). The specific value of `$last` when
+evaluating the condition is undefined in all cases except where the only statements in the body of the conditionals do not consume input, although this
+restriction may be relaxed in future versions.
+
+For example:
+
+```nmfu
+parser {
+    loop {
+        /asd\w/;
+        if $last == 'f' {
+            break;
+        }
+    }
+    "end";
+}
+
+out int{unsigned, size 2} number;
+
+parser {
+    foreach {
+        /\d+/;
+    } do {
+        number = [number * 10 + ($last - 48)];
+    }
+    if number > 100 {
+       "additional matches";
+    }
+    elif number < 4 {
+        finish;
+    }
+    else {
+        number = 0;
+    }
+    wait "\r\n";
+}
+```
+
 ## NMFU Regexes
 
 The regex grammar in NMFU is
@@ -360,4 +441,24 @@ There are some key differences though:
 - Groups are non-capturing, in the sense that they serve no function other than to logically group components together
 - The space character must be escaped, due to limitations in the lexer.
 
+## Binary Matches
 
+Most of NMFU's core matches support a binary mode, where characters can be specified as hexadecimal bytes instead of having to
+use `\xHH` escapes.
+
+For _direct-matches_, this is accomplished with the "b" suffix: 
+
+```nmfu
+parser {
+   "11 22 05"b;
+}
+```
+
+For _binary-regex-expressions_, use instead the "b" _prefix_. Binary regexes don't support character classes, but still support
+most other features. For example:
+
+```nmfu
+parser {
+   b/00 [10-15]+|(44 56? 12)/;
+}
+```
