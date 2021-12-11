@@ -191,4 +191,105 @@ to go through all of them (perhaps to prioritize the smallest one) would be usef
 
 Let's ignore the fact it's comma-separated for now, and try a basic approach:
 
+```nmfu
+out bool supports_gzip = false;
 
+// ... [snip] ...
+
+case {
+   "Accept-Encoding: "i -> {
+      loop {
+         case {
+            "\r\n" -> {break;}  // end of list
+            "gzip"i -> { supports_gzip = true; }
+            else -> {} // ignore everything else
+         }
+      }
+   }
+   // ...
+```
+
+This might look sensible, but if we try to compile it, we get an error:
+
+```
+Compile error: Infinite loop due to self-referential fallthrough
+Due to:
+- line 36:
+                        case {
+                        ^
+```
+
+!!! note
+    NMFU's errors can be a little off in terms of position; the error should really be pointing at the `else` of the case statement. 
+
+This raises the question: what's a "self-referential fallthrough"? Well, when an `else` matches, it's supposed to "send" the first nonmatching
+character to the body of the `else` condition (so that the character isn't silently eaten by the `else`), however the next statement in this case
+is the case statement itself. So, the nonmatching character _falls through_ back to the case statement, goes to the `else`, which falls through again,
+etc.; forming an infinite loop.
+
+The solution is very simple. We just need to explicitly discard the nonmatching character, which can be accomplished by just placing a "match any character"
+regex in the body of the `else` condition:
+
+```nmfu
+case {                                  
+   "\r\n" -> {break;}  // end of list   
+   "gzip"i -> { supports_gzip = true; } 
+   else -> {/./;} // ignore everything else 
+}                                       
+```
+
+This, unlike the previous example, will actually compile and work. Making this actually verify the list is comma-separated is left as an exercise to the reader.
+
+Notice also that we've used a nested loop with a `break`. By default `break` exits the innermost loop, however it can break out of an outer loop by using the loop
+name mechanism:
+
+```nmfu
+loop outer {
+   loop inner {
+      break outer;
+   }
+}
+```
+
+would break out of the outer loop instead.
+
+## Foreach: Reading base-10 numbers
+
+What if we want to support POST request bodies? We'd need to read the `Content-Length` header to figure out how long the payload is, which is encoded as an
+ASCII integer. How can we read an integer in this format with NMFU?
+
+First, let's define an output to store the length:
+
+```nmfu
+out int content_length = -1; // -1 representing not received
+```
+
+Then, we'll introduce a new statement, the _foreach-statement_. Unlike the _loop-statement_ which continually runs some statements, the _foreach-statement_ instead
+executes a series of non-matching statements after each character is read by some other potentially matching statements.
+
+For example,
+
+```nmfu
+"Content-Length: "i -> {
+   content_length = 0;
+   foreach {
+      /\d+/;
+   } do {
+      content_length = [content_length * 10 + ($last - '0')];
+   }
+   wait "\r\n";
+}
+```
+
+This will run the statement `content_length = [content_length * 10 + ($last - '0')]` _for each_ each character in the number is read by the `/\d+/` regex. The math
+syntax here is also new. The square brackets are to indicate a math expression; the only part inside them that should be new is the `$last` constant. The value of
+`$last` is whatever the byte value of the last read character is -- so in this case, the digit of the number. Some basic ASCII math later and we're parsing
+the entire number as desired.
+
+Reading this from C is, as you probably have guessed, similar to before:
+
+```c
+printf("got %d bytes of payload", parser.c.content_length);
+```
+
+This concludes the second and final part of the http tutorial.
