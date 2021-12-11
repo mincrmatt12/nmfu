@@ -1,1 +1,194 @@
-Coming soon!
+# HTTP Continued: Headers with Loops
+
+The parser created in the [last tutorial](./http1), while functional, is lacking a fairly important component: parsing request headers.
+
+Currently, our parser looks something like 
+
+```nmfu
+out enum{GET, POST, UNSUPPORTED} method;
+out str[32] request_path;
+out bool uri_too_long = false;
+
+parser {
+   case {
+      "GET " -> {method = GET;}
+      "POST " -> {method = POST;}
+      else -> {method = UNSUPPORTED; wait " ";}
+   }
+   "/";
+
+   try {
+      request_path += /[\/a-zA-Z0-9.\-_?=&+]+/;
+   }
+   catch (outofspace) {
+      uri_too_long = true;
+      wait "\r\n\r\n";
+      finish;
+   }
+
+   " HTTP/1."; /\d/;
+
+   wait "\r\n\r\n";
+}
+```
+
+Now, we'll try to make it handle a few headers. Before we do that though, let's clean up
+our error handling a bit.
+
+## Basic Macros
+
+You may already see a repeated pattern starting to emerge in our parser -- waiting for `\r\n\r\n` on an error condition.
+Repeating patterns like this can make the parser source ugly, and so NMFU offers a basic form of code reuse with _macros_:
+
+For example, we could add 
+
+```nmfu
+macro waitend() {
+   wait "\r\n\r\n";
+   finish;
+}
+```
+
+and replace the body of our error handler with just 
+
+```nmfu
+uri_too_long = true;
+waitend();
+```
+
+Since our header parsing is going to add more error conditions, let's replace the ad-hoc boolean flag with an `error_code`
+enum:
+
+```nmfu
+out enum{OK, URI_TOO_LONG} result_code;
+
+macro waitend(expr result) {
+   result_code = result;
+   wait "\r\n\r\n";
+   finish;
+}
+
+parser {
+   result_code = OK;
+   // ...
+```
+
+The `expr` here means an _integer-expression_, (as opposed to a _match-expression_), effectively anything that can be
+stored into a scalar variable (for more information, see the [section on expressions in the reference](../user-ref/parser#expressions)).
+
+Now we can succinctly set an error code and ignore the rest of a request with just one line:
+
+```
+catch (outofspace) {
+   waitend(URI_TOO_LONG);
+}
+```
+
+!!! note
+    We won't cover the C implementation of reading this enum here; if you can't figure it out go back to the previous
+    tutorial and read the section on handling HTTP request methods again -- the technique here is very similar.
+
+## Basic Authorization
+
+Alright, now let's try to parse headers. The first block construct we'll introduce is the _loop-statement_. It's very simple:
+it runs its body forever until a _break-statement_ is executed. We'll use this to implement a loop where each
+iteration consumes exactly one header (including the newline). 
+
+Consider this example:
+
+```
+wait "\r\n"; // read to end of request URI
+
+loop {
+   case {
+      "\r\n" -> {finish;} // end of request (two newlines in a row)
+      "Authorization: "i -> {
+         // todo
+         wait "\r\n";
+      }
+      else -> {
+         // ignore header
+         wait "\r\n";
+      }
+   }
+}
+```
+
+We start by reading to the end of the request line. Then, we loop. If we immediately encounter another newline, we've
+clearly got two in a row, which is the end of the request. If we see `Authorization: ` (the `i` suffix indicating case-insensitive
+matching, since header names are case-insensitive), we could parse the authorization. Otherwise, if we see a header
+we don't recognize, we read up to the newline ending it.
+
+This simple loop structure will read all headers and stop exactly at the end of the request, just like we want.
+
+Next, we'll fill in the body of the `Authorization: ` block. Let's add another output to store the received
+authorization data (which for basic authorization is just a base64'd string) and another error code for improperly
+formatted authorization (we'll leave verifying interpretable credentials to the C code):
+
+```nmfu
+out str[60] auth_payload;
+out enum{OK, URI_TOO_LONG, MALFORMED_AUTH} result_code;
+```
+
+Then, we'll fill in the case handler:
+
+```
+"Authorization: "i -> {
+   delete auth_payload;
+   try {
+      "Basic "i;
+      auth_payload += /[a-zA-Z0-9+\/=]+/;
+      "\r\n";
+   }
+   catch {
+      waitend(MALFORMED_AUTH);
+   }
+}
+```
+
+This introduces a few new things: the `delete` statement, which just clears a string output, and the bare form
+of the `catch` clause, which just means "catch all errors".
+
+## String length: Checking for authorization presence
+
+Unfortunately, we have a bit of a problem if we try to use this parser in C: how do we know if an authorization
+header was included? While we could just use a `strcmp`, since the string is null-terminated and initialized to
+zeroes, what if we wanted to use the `unterminated str` mode in NMFU? 
+
+Well, NMFU exposes the length of any string-like output (which includes `raw` outputs covered in a later section) as
+a separate member in the state object. Instead of being inside the `c` subobject, it's at the root level and
+called `auth_payload_counter` (the name of the output + `_counter`) 
+
+So, we can check for authorization by just seeing if `parser.auth_payload_counter > 0`:
+
+```c
+// assume VALID_AUTH is some correct base64 authorization string
+
+if (parser.auth_payload_counter == 0) {
+   // send a 401 with a WWW-Authenticate header
+}
+else if (strcmp(parser.c.auth_payload, VALID_AUTH)) {
+   // send a 401 invalid auth
+}
+else {
+   // auth ok
+}
+```
+
+## More advanced loops: Checking for `gzip` support
+
+What if we want our HTTP server to be more bandwidth-efficient? One of the ways we could accomplish this is by
+supporting response compression, perhaps by storing a pre-compressed version of all our pages and sending
+them instead of the plain version if the client asks.
+
+The HTTP protocol supports this with the `Accept-Encoding` header. Its value is a comma-separated list of supported
+encodings, where we're looking for `gzip`.
+
+There are a number of ways we could handle this. We could use a regex that matches all comma-separated lists
+containing gzip and then throw that into a case statement, but let's use a loop to match each item instead. You
+might imagine expanding this approach later to support matching more than one kind of encoding, and being able
+to go through all of them (perhaps to prioritize the smallest one) would be useful.
+
+Let's ignore the fact it's comma-separated for now, and try a basic approach:
+
+
