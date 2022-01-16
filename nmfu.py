@@ -663,32 +663,44 @@ class DFA:
     def simulate(self, actions):
         """
         Attempt to simulate what would happen given the input states.
-        Conditions are treated as always false, although a dictionary of {condition: value} can be provided
+        """
+
+        return list(st for _, st, act in self.trace(actions) if act is None)[-1]
+
+    def trace(self, actions):
+        """
+        Record a trace of all actions and state transitions executed given some input, in the form
+        (char, state, action)
         """
 
         position = self.starting_state
-        for action in actions:
+        yield (None, position, None)
+
+        for action_char in actions:
             try:
                 while True:
                     if position is None:
-                        return None
-                    transition = position[action]
+                        break
+                    transition = position[action_char]
                     position = transition.target
+                    yield (action_char, position, None)
                     for action in transition.actions:
+                        yield (action_char, position, action)
                         if action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_OTHER:
                             potential = action.get_target_override_targets() # TODO: handle correctly
                             position = potential[0]
                         elif action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_UNDEFINED:
-                            return action
+                            yield (action_char, action, None)
+                            return
                     if not transition.is_fallthrough:
                         break
             except AttributeError:
-                return None
+                yield (action_char, None, None)
+                return
             else:
                 if not position:
-                    return position
-
-        return position
+                    yield (action_char, None, None)
+                    return
 
     def simulate_accepts(self, actions):
         """
