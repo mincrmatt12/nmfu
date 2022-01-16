@@ -27,7 +27,7 @@ int_attr: SIGNED -> signed_attr
 
 For example: 
 
-```
+```nmfu
 out int{unsigned, size 16} content_length = 32;
 out bool supports_gzip = false;
 
@@ -61,7 +61,7 @@ macro_arg: "macro" IDENTIFIER -> macro_macro_arg
 
 For example:
 
-```
+```nmfu
 macro ows() { // optional white space
    optional {
       " ";
@@ -75,7 +75,7 @@ declaration to the call-site. Note that although macros can call other macros, t
 Macros can also take arguments, which are similarly treated as parse-tree level replacements, with the added restriction
 that their types _are_ checked. For example:
 
-```
+```nmfu
 macro read_number(out target, match delimit) {
     target = 0;
     foreach {
@@ -107,7 +107,7 @@ hook_decl: "hook" IDENTIFIER ";"
 
 For example:
 
-```
+```nmfu
 hook got_header;
 ```
 
@@ -257,7 +257,7 @@ The current list of _builtin-math-variables_ is:
 
 For example:
 
-```
+```nmfu
 content_length = [content_length * 10 + ($last - '0')];
 into = [into | (($last & 127) << (7 * varint_counter))];
 [!($last == ' ' || $last == '\t') || advisory.len > 0];
@@ -301,7 +301,7 @@ _case-statements_ match one or more _match-expressions_ and upon successful matc
 
 For example:
 
-```
+```nmfu
 case {
    "GET" -> {method = GET;}
    "POST" -> {method = POST;}
@@ -314,7 +314,7 @@ The special constant "else" means anything not matched by any of the other claus
 
 _try-except-statements_ can redirect certain error conditions to the beginning of a different block. They follow the general structure of
 
-```
+```nmfu
 try {
    // ... some set of statements ...
 }
@@ -325,7 +325,7 @@ catch {
 
 The specific error conditions which they match can be limited by placing a parenthesized comma-separated list of _catch-options_ after the "catch" token, like
 
-```
+```nmfu
 try {
    url = /\w+/;
 }
@@ -336,7 +336,7 @@ catch (outofspace) {
 
 _foreach-statements_ allow you to run various statements for every character read by some other set of statements. For example:
 
-```
+```nmfu
 number = 0;
 foreach {
    /\d+/;
