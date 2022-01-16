@@ -15,7 +15,8 @@ There are a number of examples present in the `examples/` folder, as well as doc
 
 ## Plugins
 
-There is a vim plugin available which adds syntax highlighting for `.nmfu` files at [mincrmatt12/nmfu-vim](https://github.com/mincrmatt12/nmfu-vim).
+There is a vim plugin available which adds syntax highlighting for `.nmfu` files at [mincrmatt12/nmfu-vim](https://github.com/mincrmatt12/nmfu-vim), as well
+as a pygments lexer plugin at [mincrmatt12/nmfu-pygments](https://github.com/mincrmatt12/nmfu-pygments).
 
 ## License
 
