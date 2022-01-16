@@ -1619,6 +1619,13 @@ class Action:
             children.extend(i.all_subactions())
         return children
 
+    def may_return_early(self):
+        """
+        Will this action return from _feed but still expect the state to be valid.
+        """
+
+        return False
+
 class ConditionalAction(Action, HasDefaultDebugInfo):
     """
     Implements an entire if-else node chain
@@ -3734,12 +3741,13 @@ class LoopNode(ActionSinkNode, ActionSourceNode):
             transition.actions.extend(self.after_break_actions)
             should_try_to_append = True
 
-        # Check if any actions are break actions
-        for transition in sub_dfa.all_transitions():
-            for action in transition.actions:
-                for subaction in action.all_subactions():
-                    if subaction == self.break_action:
-                        should_try_to_append = True
+        if self.break_action in self.loop_start_actions:
+            should_try_to_append = True
+        else:
+            for x in self.loop_start_actions:
+                if self.break_action in x.all_subactions():
+                    should_try_to_append = True
+                    break
 
         # Verify that the accepting states are all distinct TODO: make this properly do ambiguity resolution
         for accept_state in sub_dfa.accepting_states:
