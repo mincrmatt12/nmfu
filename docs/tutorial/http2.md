@@ -78,7 +78,7 @@ stored into a scalar variable (for more information, see the [section on express
 
 Now we can succinctly set an error code and ignore the rest of a request with just one line:
 
-```
+```nmfu
 catch (outofspace) {
    waitend(URI_TOO_LONG);
 }
@@ -96,7 +96,7 @@ iteration consumes exactly one header (including the newline).
 
 Consider this example:
 
-```
+```nmfu
 wait "\r\n"; // read to end of request URI
 
 loop {
@@ -132,7 +132,7 @@ out enum{OK, URI_TOO_LONG, MALFORMED_AUTH} result_code;
 
 Then, we'll fill in the case handler:
 
-```
+```nmfu
 "Authorization: "i -> {
    delete auth_payload;
    try {

@@ -17,7 +17,7 @@ buffer, which by default is null-terminated.
 
 Next, we tell NMFU what we want our parser to parse inside the `parser` block:
 
-```
+```nmfu
 parser {
    "GET /";
    request_path += /[\/a-zA-Z0-9.\-_?=&+]+/;
@@ -230,7 +230,7 @@ Let's go back to how we read the request path. What if we wanted our server to o
 
 We can use the try-catch functionality of NMFU to accomplish this. Let's add an output flag to indicate if this happens with
 
-```
+```nmfu
 out bool uri_too_long = false;
 ```
 
@@ -256,7 +256,7 @@ the parser early with the `finish;` statement.
 
 We could read this from C with
 
-```
+```c
 if (parser.c.uri_too_long) {
    // send a 414
 }
