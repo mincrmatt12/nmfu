@@ -99,10 +99,13 @@ simple_stmt: expr -> match_stmt
            | "break" IDENTIFIER? -> break_stmt
            | "delete" IDENTIFIER -> delete_stmt
            | "finish" -> finish_stmt
+           | "finish" IDENTIFIER -> custom_finish_stmt
+           | "yield" IDENTIFIER -> custom_yield_stmt
            | "wait" expr -> wait_stmt
 
 block_stmt: "loop" IDENTIFIER? "{" statement+ "}" -> loop_stmt
           | "case" "{" case_clause+ "}" -> case_stmt
+          | "greedy" "case" "{" greedy_prio_block+ "}" -> greedy_case_stmt
           | "optional" "{" statement+ "}" -> optional_stmt
           | "try" "{" statement+ "}" catch_block -> try_stmt
           | "foreach" "{" statement+ "}" "do" "{" foreach_actions "}" -> foreach_stmt
@@ -114,6 +117,10 @@ else_condition: "else" "{" statement+ "}"
 foreach_actions: statement+
 
 catch_block: "catch" catch_options? "{" statement* "}"
+
+?greedy_prio_block: "prio" NUMBER case_clause
+                  | "prio" NUMBER "{" case_clause+ "}"
+                  | case_clause
 
 case_clause: case_predicate ("," case_predicate)* "->" "{" statement* "}"
 case_predicate: "else" -> else_predicate
@@ -3345,15 +3352,19 @@ class MatchNode(ActionSinkNode):
 
 class CaseNode(Node):
     """
-    Handles cases
+    Handles cases.
     """
 
-    def __init__(self, sub_matches: Dict[Set[Optional[Match]], Node]):
+    def __init__(self, sub_matches: Dict[Set[Optional[Match]], Node], greedy: bool = False, priorities: Dict[Set[Optional[Match]], int] = None):
         super().__init__()
         self.sub_matches = {k: v for k, v in sub_matches.items() if v is not None}
         self.empty_matches = [k for k, v in sub_matches.items() if v is None]
+        self.priorities = defaultdict(int)
+        if priorities:
+            self.priorities.update(priorities)
         self.case_match_actions = defaultdict(list)
         self.next = None
+        self.greedy = greedy
 
         self._find_case_actions()
 
@@ -3381,7 +3392,7 @@ class CaseNode(Node):
             del self.sub_matches[i]
             self.empty_matches.append(i)
 
-    def _merge(self, ds: Iterable[DFA], error_handling_state: DFState):
+    def _merge(self, ds: Iterable[DFA], error_handling_state: DFState, priorities: Dict[DFA, int]):
         r"""
         Merge the DFAs in the list ds, ensuring that all finishing states are kept as-is.
 
@@ -3424,10 +3435,17 @@ class CaseNode(Node):
                 is_part_of.add(sub_dfa)
 
             if len(corresponds_to_finishes_in) > 1:
-                raise IllegalDFAStateConflictsError("Ambigious case label: multiple possible finishes", *corresponds_to_finishes_in)
+                if not self.greedy:
+                    raise IllegalDFAStateConflictsError("Ambigious case label: multiple possible finishes", *corresponds_to_finishes_in)
+                target = max(corresponds_to_finishes_in, key=lambda x: priorities[x])
+                if sum(1 for x in corresponds_to_finishes_in if priorities[x] == priorities[target]) > 1:
+                    raise IllegalDFAStateConflictsError("Ambigious case label: multiple possible finishes with same priority {}".format(priorities[target]), 
+                            *(x for x in corresponds_to_finishes_in if priorities[x] == priorities[target]))
+                corresponding_finish_states[target].append(new_state)
+                new_dfa.mark_accepting(new_state)
             elif len(corresponds_to_finishes_in) == 1:
-                if len(is_part_of) != 1:
-                    raise IllegalDFAStateConflictsError("Ambigious case label: should finish or check next", *is_part_of)
+                if len(is_part_of) != 1 and not self.greedy:
+                    raise IllegalDFAStateConflictsError("Ambigious case label: should finish or check next. If you mean to finish, use a greedy case.", *is_part_of)
                 corresponding_finish_states[next(iter(corresponds_to_finishes_in))].append(new_state)
                 new_dfa.mark_accepting(new_state)
 
@@ -3556,6 +3574,8 @@ class CaseNode(Node):
         empty_backreference = {}
         # All dfas that need to be merged
         mergeable_ds = set() 
+        # Their priorities
+        priorities = {}
         # Flatten the sub_matches
         for sub_matches in self.sub_matches:
             for sub_match in sub_matches:
@@ -3563,6 +3583,7 @@ class CaseNode(Node):
                     converted = sub_match.convert(current_error_handlers)
                     original_backreference[converted] = sub_matches
                     mergeable_ds.add(converted)
+                    priorities[converted] = self.priorities[sub_matches]
                 else:
                     original_backreference[None] = sub_matches
         for empty_matches in self.empty_matches:
@@ -3572,12 +3593,13 @@ class CaseNode(Node):
                     original_backreference[converted] = None
                     empty_backreference[converted] = empty_matches
                     mergeable_ds.add(converted)
+                    priorities[converted] = self.priorities[empty_matches]
                 else:
                     original_backreference[None] = None
                     empty_backreference[None] = None
 
         # Create the merged acceptor
-        decider_dfa, corresponding_finish_states = self._merge(mergeable_ds, current_error_handlers[ErrorReasons.NO_MATCH])
+        decider_dfa, corresponding_finish_states = self._merge(mergeable_ds, current_error_handlers[ErrorReasons.NO_MATCH], priorities)
 
         # Check if we need to handle else
         if has_else:
@@ -4552,6 +4574,24 @@ class ParseCtx:
                 DTAG.SOURCE_LINE, stmt.line),
                 DTAG.SOURCE_COLUMN, stmt.column
             )
+        elif stmt.data == "greedy_case_stmt":
+            case_blocks = {}
+            priorities = {}
+            for block in stmt.children:
+                if block.data == "case_clause":
+                    k, v = self._parse_case_clause(block)
+                    case_blocks[k] = v
+                else:
+                    for clause in block.children[1:]:
+                        k, v = self._parse_case_clause(clause)
+                        case_blocks[k] = v
+                        priorities[k] = int(block.children[0].value)
+
+            return ProgramData.imbue(ProgramData.imbue(CaseNode(case_blocks, greedy=True, priorities=priorities), 
+                DTAG.SOURCE_LINE, stmt.line),
+                DTAG.SOURCE_COLUMN, stmt.column
+            )
+
         elif stmt.data == "if_stmt":
             conditions_ordered = []
             condition_map = {}
