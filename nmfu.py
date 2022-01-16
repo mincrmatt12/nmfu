@@ -59,9 +59,12 @@ start: top_decl* parser_decl top_decl*
 ?top_decl: out_decl
          | macro_decl
          | hook_decl
+         | code_decl
 
 out_decl: "out" out_type IDENTIFIER ";"
         | "out" out_type IDENTIFIER "=" atom ";"
+
+code_decl: RESULT_CODE IDENTIFIER ("," IDENTIFIER)* ";"
 
 out_type: "bool" -> bool_type
         | "int" ("{" int_attr ("," int_attr)* "}")? -> int_type
@@ -86,6 +89,7 @@ macro_arg: "macro" IDENTIFIER -> macro_macro_arg
          | "expr"  IDENTIFIER -> macro_int_expr_arg
          | "hook"  IDENTIFIER -> macro_hook_arg
          | "loop"  IDENTIFIER -> macro_breaktgt_arg
+         | RESULT_CODE IDENTIFIER -> macro_rescode_arg
 
 parser_decl: "parser" "{" statement+ "}"
 
@@ -221,6 +225,8 @@ BOOL_CONST: /true|false/
 
 // catch options
 CATCH_OPTION: /nomatch|outofspace/
+
+RESULT_CODE: /yieldcode|finishcode/
 
 %import common.CNAME -> IDENTIFIER
 %import common.SIGNED_INT -> NUMBER
@@ -773,7 +779,7 @@ class DFA:
         result = set()
 
         for t in self.all_transitions():
-            if action in t.actions:
+            if action in itertools.chain(*(x.all_subactions() for x in t.actions)):
                 result.add(t)
 
         return result
@@ -985,6 +991,8 @@ class ProgramFlag(int, enum.Enum):
     STRICT_DONE_TOKEN_GENERATION = (15, "Only return DONE from _feed at accept states, not from transitions to accept states")
     EOF_SUPPORT = (16, "Generate a end function and support detecting eofs")
     INDIRECT_START_PTR = (17, "Use an indirect pointer for start to report where the input ends precisely")
+    YIELD_SUPPORT = (30, "Support yield expressions; implies indirect start pointers", False, (17,))
+    ZERO_LEN_INPUT_SUPPORT = (31, "Allow calling feed with start == end", False)
     # |
     # - String storage options
     ALLOCATE_STR_SPACE_IN_STRUCT = (5, "Allocate string space in struct", True, (), (6,))  # allocate the string space in the struct as an array, default
@@ -1715,6 +1723,32 @@ class FinishAction(Action, HasDefaultDebugInfo):
     def debug_lookup(self, tag: DTAG):
         if tag == DTAG.NAME:
             return "exit action"
+
+class CustomFinishAction(FinishAction):
+    def __init__(self, result_code: str):
+        super().__init__()
+        self.result_code = result_code
+
+    def debug_lookup(self, tag: DTAG):
+        if tag == DTAG.NAME:
+            return "exit action code {}".format(self.result_code)
+
+class CustomYieldAction(Action, HasDefaultDebugInfo):
+    def __init__(self, result_code: str):
+        self.result_code = result_code
+
+    def get_mode(self):
+        return ActionMode.AT_FINISH
+
+    def is_timing_strict(self):
+        return True
+
+    def debug_lookup(self, tag: DTAG):
+        if tag == DTAG.NAME:
+            return "yield action code {}".format(self.result_code)
+
+    def may_return_early(self):
+        return True
 
 class CallHook(Action, HasDefaultDebugInfo):
     def __init__(self, name):
@@ -3654,7 +3688,6 @@ class CaseNode(Node):
 
         ProgramData.imbue(decider_dfa, DTAG.PARENT, self)
 
-        # If we need to, add a boring after thing
         if self.next is not None:
             decider_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH])
         
@@ -4007,6 +4040,8 @@ class MacroArgumentKind(enum.Enum):
     INTEXPR = 3
     HOOK = 4
     LOOP = 5
+    FINISHCODE = 6
+    YIELDCODE = 7
 
     EXPR = 10
 
@@ -4022,7 +4057,12 @@ class MacroArgument:
             return self.kind
 
     def should_early_bind(self):
-        return self.kind in (MacroArgumentKind.MACRO, MacroArgumentKind.OUT, MacroArgumentKind.HOOK, MacroArgumentKind.LOOP)
+        """
+        Should this argument be looked up immediately at macro entry, instead of just recording the parse tree for later use. Generally
+        only valid for globally-scoped identifying arguments
+        """
+
+        return self.kind in (MacroArgumentKind.MACRO, MacroArgumentKind.OUT, MacroArgumentKind.HOOK, MacroArgumentKind.LOOP, MacroArgumentKind.FINISHCODE, MacroArgumentKind.YIELDCODE)
     
 class Macro:
     def __init__(self, name_token: lark.Token, parse_tree: lark.Tree, arguments: List[MacroArgument]):
@@ -4040,6 +4080,8 @@ class Macro:
                 MacroArgumentKind.OUT: ("identifier_const",),
                 MacroArgumentKind.HOOK: ("identifier_const",),
                 MacroArgumentKind.LOOP: ("identifier_const",),
+                MacroArgumentKind.FINISHCODE: ("identifier_const",),
+                MacroArgumentKind.YIELDCODE: ("identifier_const",),
                 MacroArgumentKind.MATCH: ("regex", "end_expr", "concat_expr", "string_const", "string_case_const", "binary_regex", "binary_string_const"),
                 MacroArgumentKind.INTEXPR: ("string_const", "bool_const", "number_const", "char_const", "identifier_const", *all_sum_expr_nodes)
             }[argspec.kind]
@@ -4069,6 +4111,9 @@ class ParseCtx:
         self.innermost_break_handler = None  # just an Action
         
         self.bound_argument_stack: List[Dict[Tuple[MacroArgumentKind, str], lark.Tree]] = []
+
+        self.yield_codes = []
+        self.finish_codes = []
     
     def parse(self):
         # Parse state_object_spec
@@ -4076,6 +4121,11 @@ class ParseCtx:
             out_obj = self._parse_out_decl(out)
             if out_obj.name in self.state_object_spec:
                 raise DuplicateDefinitionError("output variable", out_obj, out_obj.name)
+            if out_obj.holds_a(OutputStorageType.ENUM):
+                if any(x.upper() == out_obj.name.upper() for x in self.state_object_spec):
+                    raise DuplicateDefinitionError("enum header name", out_obj, out_obj.name.upper())
+                if out_obj.name == "finish":
+                    raise IllegalParseTree("Enumerations cannot be named 'finish'", out)
             self.state_object_spec[out_obj.name] = out_obj
         # Parse macros
         for macro in self._parse_tree.find_data("macro_decl"):
@@ -4088,6 +4138,21 @@ class ParseCtx:
             if hook.children[0].value in self.hooks:
                 raise DuplicateDefinitionError("hook", hook.children[0], hook.children[0].value)
             self.hooks.append(hook.children[0].value)
+
+        for code in self._parse_tree.find_data("code_decl"):
+            if code.children[0].value == "yieldcode" and not ProgramData.do(ProgramFlag.YIELD_SUPPORT):
+                raise IllegalParseTree("Yield support not enabled", code)
+
+            target = {
+                "yieldcode": self.yield_codes,
+                "finishcode": self.finish_codes
+            }[code.children[0].value]
+            for i in code.children[1:]:
+                val = i.value
+                if val in target:
+                    raise DuplicateDefinitionError("code", i, val)
+                target.append(val)
+
         # Parse main
         parser_decl = next(self._parse_tree.find_data("parser_decl"))
         self.ast = self._parse_stmt_seq(parser_decl.children)
@@ -4112,28 +4177,39 @@ class ParseCtx:
             if (context, name) in entry:
                 return entry[(context, name)]
         # otherwise, try and find globally 
-        if context not in [MacroArgumentKind.MACRO, MacroArgumentKind.LOOP, MacroArgumentKind.HOOK, MacroArgumentKind.OUT]:
+        if context not in [MacroArgumentKind.MACRO, MacroArgumentKind.LOOP, MacroArgumentKind.HOOK, MacroArgumentKind.OUT, MacroArgumentKind.FINISHCODE, MacroArgumentKind.YIELDCODE]:
             raise UndefinedReferenceError("named expression", from_tree)
 
-        if context == MacroArgumentKind.HOOK:
-            if name not in self.hooks:
-                raise UndefinedReferenceError("hook", from_tree)
+        if context in (MacroArgumentKind.HOOK, MacroArgumentKind.FINISHCODE, MacroArgumentKind.YIELDCODE):
+            storage = {
+                MacroArgumentKind.HOOK: self.hooks,
+                MacroArgumentKind.FINISHCODE: self.finish_codes,
+                MacroArgumentKind.YIELDCODE: self.yield_codes
+            }[context]
+
+            if name not in storage:
+                raise UndefinedReferenceError({
+                    MacroArgumentKind.HOOK: "hook",
+                    MacroArgumentKind.YIELDCODE: "yield code",
+                    MacroArgumentKind.FINISHCODE: "finish code"
+                }[context], from_tree)
+
             return name
-        
-        storage = {
-            MacroArgumentKind.MACRO: self.macros,
-            MacroArgumentKind.LOOP: self.break_handlers,
-            MacroArgumentKind.OUT: self.state_object_spec,
-        }[context]
+        else:
+            storage = {
+                MacroArgumentKind.MACRO: self.macros,
+                MacroArgumentKind.LOOP: self.break_handlers,
+                MacroArgumentKind.OUT: self.state_object_spec,
+            }[context]
 
-        if name not in storage:
-            raise UndefinedReferenceError({
-                MacroArgumentKind.MACRO: "macro",
-                MacroArgumentKind.OUT: "variable",
-                MacroArgumentKind.LOOP: "break target"
-            }, from_tree)
+            if name not in storage:
+                raise UndefinedReferenceError({
+                    MacroArgumentKind.MACRO: "macro",
+                    MacroArgumentKind.OUT: "variable",
+                    MacroArgumentKind.LOOP: "break target"
+                }, from_tree)
 
-        return storage[name]
+            return storage[name]
 
     def _parse_macro_arguments(self, args: lark.Tree):
         if args.data == "macro_arg_empty":
@@ -4141,17 +4217,21 @@ class ParseCtx:
         defined = set()
         parsed_args = []
         for i in args.children:
-            name = i.children[0].value
+            if i.data == "macro_rescode_arg":
+                name = i.children[1].value
+                kind = {"yieldcode": MacroArgumentKind.YIELDCODE, "finishcode": MacroArgumentKind.FINISHCODE}[i.children[0].value]
+            else:
+                name = i.children[0].value
+                kind = {
+                    "macro_macro_arg": MacroArgumentKind.MACRO,
+                    "macro_out_arg": MacroArgumentKind.OUT,
+                    "macro_match_expr_arg": MacroArgumentKind.MATCH,
+                    "macro_int_expr_arg": MacroArgumentKind.INTEXPR,
+                    "macro_hook_arg": MacroArgumentKind.HOOK,
+                    "macro_breaktgt_arg": MacroArgumentKind.LOOP,
+                }[i.data]
             if name in defined:
                 raise DuplicateDefinitionError("macro argument", i, name)
-            kind = {
-                "macro_macro_arg": MacroArgumentKind.MACRO,
-                "macro_out_arg": MacroArgumentKind.OUT,
-                "macro_match_expr_arg": MacroArgumentKind.MATCH,
-                "macro_int_expr_arg": MacroArgumentKind.INTEXPR,
-                "macro_hook_arg": MacroArgumentKind.HOOK,
-                "macro_breaktgt_arg": MacroArgumentKind.LOOP,
-            }[i.data]
             parsed_args.append(MacroArgument(name, kind))
         return parsed_args
 
@@ -4548,6 +4628,18 @@ class ParseCtx:
             ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.line)
             ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.column)
             return ActionNode(act)
+        elif stmt.data == "custom_finish_stmt":
+            act = CustomFinishAction(self._lookup_named_entity(MacroArgumentKind.FINISHCODE, stmt.children[0]))
+            ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.line)
+            ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.column)
+            return ActionNode(act)
+        elif stmt.data == "custom_yield_stmt":
+            if not ProgramData.do(ProgramFlag.YIELD_SUPPORT):
+                raise IllegalParseTree("Yield support not enabled", stmt)
+            act = CustomYieldAction(self._lookup_named_entity(MacroArgumentKind.YIELDCODE, stmt.children[0]))
+            ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.line)
+            ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.column)
+            return InterruptableActionNode(act)
         elif stmt.data == "break_stmt":
             if stmt.children:
                 act = self._lookup_named_entity(MacroArgumentKind.LOOP, stmt.children[0])
@@ -4701,6 +4793,8 @@ class DfaCompileCtx:
     def __init__(self, parse_ctx: ParseCtx):
         self.state_object_spec = parse_ctx.state_object_spec
         self.hooks = parse_ctx.hooks
+        self.finish_codes = parse_ctx.finish_codes
+        self.yield_codes = parse_ctx.yield_codes
         self.ast = parse_ctx.ast
         self.start_actions = parse_ctx.start_actions
         self.generic_fail_state = parse_ctx.generic_fail_state
@@ -4917,6 +5011,8 @@ class CodegenCtx:
     def __init__(self, dfa_compile_ctx: DfaCompileCtx, program_name: str):
         self.start_actions = dfa_compile_ctx.start_actions
         self.hooks = dfa_compile_ctx.hooks
+        self.finish_codes = dfa_compile_ctx.finish_codes
+        self.yield_codes = dfa_compile_ctx.yield_codes
         self.dfa = dfa_compile_ctx.dfa
         self.state_object_spec: List[OutputStorage] = list(dfa_compile_ctx.state_object_spec.values())
         self.generic_fail_state = dfa_compile_ctx.generic_fail_state
@@ -4950,7 +5046,11 @@ class CodegenCtx:
             enum_content.add(f"{self.program_name.upper()}_OK,")
             enum_content.add(f"{self.program_name.upper()}_FAIL,")
             enum_content.add(f"{self.program_name.upper()}_DONE,")
-            # todo: allow custom
+            for fc in self.finish_codes:
+                enum_content.add(f"{self.program_name.upper()}_FINISH_{fc},")
+            for yc in self.yield_codes:
+                enum_content.add(f"{self.program_name.upper()}_YIELD_{yc},")
+
         result.add("};")
         result.add(f"typedef enum {self.program_name}_result {self.program_name}_result_t;")
         result.add()
@@ -5268,8 +5368,14 @@ class CodegenCtx:
             ctx = IntegerExprUseContext.ASSIGN_INITIAL
         elif is_end:
             ctx = IntegerExprUseContext.ASSIGN_ON_END
-        if isinstance(action, FinishAction):
+        if isinstance(action, CustomFinishAction):
+            result.add(f"return {self.program_name.upper()}_FINISH_{action.result_code};")
+        elif isinstance(action, FinishAction):
             result.add(f"return {self.program_name.upper()}_DONE;")
+        elif isinstance(action, CustomYieldAction):
+            if not ProgramData.do(ProgramFlag.YIELD_SUPPORT):
+                raise IllegalDFAStateError("Yield support not enabled", action)
+            result.add(f"return {self.program_name.upper()}_YIELD_{action.result_code};")
         elif isinstance(action, SetTo):
             target = action.into_storage
             value = self._generate_code_for_int_expr(action.value_expr, ctx, target)
