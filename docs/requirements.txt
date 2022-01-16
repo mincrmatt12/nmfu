@@ -1,0 +1,4 @@
+git+https://github.com/mincrmatt12/nmfu-pygments
+mkdocs
+pymdown-extensions
+pygments
