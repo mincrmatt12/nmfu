@@ -1129,11 +1129,19 @@ class ProgramData:
         Find the imbued object's data, or -- if none exists -- find it's parents
         """
 
-        if type(obj) in (lark.Token, lark.Tree):
+        if type(obj) is lark.Token:
             if tag == DTAG.SOURCE_LINE:
                 return obj.line
             elif tag == DTAG.SOURCE_COLUMN:
                 return obj.column
+            else:
+                return default
+
+        if type(obj) is lark.Tree:
+            if tag == DTAG.SOURCE_LINE:
+                return obj.meta.line
+            elif tag == DTAG.SOURCE_COLUMN:
+                return obj.meta.column
             else:
                 return default
 
@@ -3004,20 +3012,20 @@ class RegexMatch(Match):
         elif tree_data in ("regex_any", "regex_char_class", "regex_set", "regex_inverted_set"):
             return ProgramData.imbue(
                 RegexAlternation(self.character_class_mappings[list(self._visit_all_char_classes(regex_tree))[0]]),
-                DTAG.SOURCE_LINE, regex_tree.line,
-                DTAG.SOURCE_COLUMN, regex_tree.column
+                DTAG.SOURCE_LINE, regex_tree.meta.line,
+                DTAG.SOURCE_COLUMN, regex_tree.meta.column
             )
         elif tree_data == "regex_alternation":
             return ProgramData.imbue(
                 RegexAlternation(self._interpret_parse_tree(x) for x in regex_tree.children),
-                DTAG.SOURCE_LINE, regex_tree.line,
-                DTAG.SOURCE_COLUMN, regex_tree.column
+                DTAG.SOURCE_LINE, regex_tree.meta.line,
+                DTAG.SOURCE_COLUMN, regex_tree.meta.column
             )
         elif tree_data == "regex_raw_match":
             return ProgramData.imbue(
                 RegexAlternation(self.character_class_mappings[self._convert_raw_regex_unimportant(regex_tree.children[0])]),
-                DTAG.SOURCE_LINE, regex_tree.line,
-                DTAG.SOURCE_COLUMN, regex_tree.column
+                DTAG.SOURCE_LINE, regex_tree.meta.line,
+                DTAG.SOURCE_COLUMN, regex_tree.meta.column
             )
         elif tree_data == "regex_operation":
             sub_match = self._interpret_parse_tree(regex_tree.children[0])
@@ -4376,9 +4384,9 @@ class ParseCtx:
         """
 
         if expr.data == "math_num":
-            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(self._convert_int(expr.children[0].value)), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
+            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(self._convert_int(expr.children[0].value)), DTAG.SOURCE_LINE, expr.meta.line), DTAG.SOURCE_COLUMN, expr.meta.column)
         elif expr.data == "math_char_const":
-            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(ord(self._convert_char_const(expr.children[0].value))), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
+            return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr(ord(self._convert_char_const(expr.children[0].value))), DTAG.SOURCE_LINE, expr.meta.line), DTAG.SOURCE_COLUMN, expr.meta.column)
         elif expr.data == "math_var":
             # Try to handle enums too
             if into_storage is not None and into_storage.type == OutputStorageType.ENUM and expr.children[0].value in into_storage.enum_values:
@@ -4389,7 +4397,7 @@ class ParseCtx:
             out_spec, kind = self._lookup_named_entity((MacroArgumentKind.EXPR, MacroArgumentKind.OUT), expr.children[0])
             if kind == MacroArgumentKind.EXPR:
                 return self._parse_integer_expr(out_spec, into_storage=into_storage)
-            return ProgramData.imbue(ProgramData.imbue(OutIntegerExpr(out_spec), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
+            return ProgramData.imbue(ProgramData.imbue(OutIntegerExpr(out_spec), DTAG.SOURCE_LINE, expr.meta.line), DTAG.SOURCE_COLUMN, expr.meta.column)
         elif expr.data in ["math_str_len", "math_str_index"]:
             out_spec = self._lookup_named_entity(MacroArgumentKind.OUT, expr.children[0])
 
@@ -4402,13 +4410,13 @@ class ParseCtx:
                 val = StringRefIntegerExpr(out_spec, self._parse_integer_expr(expr.children[1]))
             
             return ProgramData.imbue(val,
-                    DTAG.SOURCE_LINE, expr.line,
-                    DTAG.SOURCE_COLUMN, expr.column
+                    DTAG.SOURCE_LINE, expr.meta.line,
+                    DTAG.SOURCE_COLUMN, expr.meta.column
             )
         elif expr.data == "builtin_math_var":
             ref = expr.children[0]
             if ref.value == "last":
-                return ProgramData.imbue(ProgramData.imbue(LastCharIntegerExpr(), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
+                return ProgramData.imbue(ProgramData.imbue(LastCharIntegerExpr(), DTAG.SOURCE_LINE, expr.meta.line), DTAG.SOURCE_COLUMN, expr.meta.column)
             else:
                 raise UndefinedReferenceError("builtin math variable", ref)
         elif expr.data == "sum_expr":
@@ -4490,7 +4498,7 @@ class ParseCtx:
                 result_type = into_storage.type
 
             try:
-                return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr({"true": 1, "false": 0}[expr.children[0].value], result_type), DTAG.SOURCE_LINE, expr.line), DTAG.SOURCE_COLUMN, expr.column)
+                return ProgramData.imbue(ProgramData.imbue(LiteralIntegerExpr({"true": 1, "false": 0}[expr.children[0].value], result_type), DTAG.SOURCE_LINE, expr.meta.line), DTAG.SOURCE_COLUMN, expr.meta.column)
             except KeyError as e:
                 raise UndefinedReferenceError("boolean constant", expr.children[0]) from e
         elif expr.data in all_sum_expr_nodes:
@@ -4524,20 +4532,20 @@ class ParseCtx:
             return match
         elif expr.data == "regex":
             match = RegexMatch(expr)
-            ProgramData.imbue(match, DTAG.SOURCE_LINE, expr.line)
-            ProgramData.imbue(match, DTAG.SOURCE_COLUMN, expr.column)
+            ProgramData.imbue(match, DTAG.SOURCE_LINE, expr.meta.line)
+            ProgramData.imbue(match, DTAG.SOURCE_COLUMN, expr.meta.column)
             return match
         elif expr.data == "binary_regex":
             match = BinaryRegexMatch(expr)
-            ProgramData.imbue(match, DTAG.SOURCE_LINE, expr.line)
-            ProgramData.imbue(match, DTAG.SOURCE_COLUMN, expr.column)
+            ProgramData.imbue(match, DTAG.SOURCE_LINE, expr.meta.line)
+            ProgramData.imbue(match, DTAG.SOURCE_COLUMN, expr.meta.column)
             return match
         elif expr.data == "end_expr":
             if not ProgramData.do(ProgramFlag.EOF_SUPPORT):
                 raise IllegalParseTree("end match but EOF support is not enabled", expr)
             match = EndMatch()
-            ProgramData.imbue(match, DTAG.SOURCE_LINE, expr.line)
-            ProgramData.imbue(match, DTAG.SOURCE_COLUMN, expr.column)
+            ProgramData.imbue(match, DTAG.SOURCE_LINE, expr.meta.line)
+            ProgramData.imbue(match, DTAG.SOURCE_COLUMN, expr.meta.column)
             return match
         elif expr.data == "concat_expr":
             return ConcatMatch(list(self._parse_match_expr(x) for x in expr.children))
@@ -4629,23 +4637,23 @@ class ParseCtx:
             if kind == MacroArgumentKind.MACRO:
                 return self._parse_macro_call(stmt, referenced, stmt.children[1:])
             else:
-                return ActionNode(ProgramData.imbue(ProgramData.imbue(CallHook(referenced), DTAG.SOURCE_LINE, stmt.line), DTAG.SOURCE_COLUMN, stmt.column))
+                return ActionNode(ProgramData.imbue(ProgramData.imbue(CallHook(referenced), DTAG.SOURCE_LINE, stmt.meta.line), DTAG.SOURCE_COLUMN, stmt.meta.column))
         elif stmt.data == "finish_stmt":
             act = FinishAction()
-            ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.line)
-            ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.column)
+            ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.meta.line)
+            ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.meta.column)
             return ActionNode(act)
         elif stmt.data == "custom_finish_stmt":
             act = CustomFinishAction(self._lookup_named_entity(MacroArgumentKind.FINISHCODE, stmt.children[0]))
-            ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.line)
-            ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.column)
+            ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.meta.line)
+            ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.meta.column)
             return ActionNode(act)
         elif stmt.data == "custom_yield_stmt":
             if not ProgramData.do(ProgramFlag.YIELD_SUPPORT):
                 raise IllegalParseTree("Yield support not enabled", stmt)
             act = CustomYieldAction(self._lookup_named_entity(MacroArgumentKind.YIELDCODE, stmt.children[0]))
-            ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.line)
-            ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.column)
+            ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.meta.line)
+            ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.meta.column)
             return InterruptableActionNode(act)
         elif stmt.data == "break_stmt":
             if stmt.children:
@@ -4654,24 +4662,24 @@ class ParseCtx:
                 act = self.innermost_break_handler
             if act is None:
                 raise IllegalParseTree("Break outside of loop", stmt)
-            ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.line)
-            ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.column)
+            ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.meta.line)
+            ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.meta.column)
             return ActionNode(act)
         elif stmt.data == "delete_stmt":
             targeted = self._lookup_named_entity(MacroArgumentKind.OUT, stmt.children[0])
             
             act = DeleteBuf(targeted)
             return ProgramData.imbue(ActionNode(act),
-                DTAG.SOURCE_LINE, stmt.line,
-                DTAG.SOURCE_COLUMN, stmt.column
+                DTAG.SOURCE_LINE, stmt.meta.line,
+                DTAG.SOURCE_COLUMN, stmt.meta.column
             )
         elif stmt.data in ("assign_stmt", "append_stmt"):
-            return ProgramData.imbue(self._parse_assign_stmt(stmt, stmt.data == "append_stmt"), DTAG.SOURCE_LINE, stmt.line, DTAG.SOURCE_COLUMN, stmt.column)
+            return ProgramData.imbue(self._parse_assign_stmt(stmt, stmt.data == "append_stmt"), DTAG.SOURCE_LINE, stmt.meta.line, DTAG.SOURCE_COLUMN, stmt.meta.column)
         elif stmt.data == "case_stmt":
             # Find all of the matches
             return ProgramData.imbue(ProgramData.imbue(CaseNode({k: v for k, v in (self._parse_case_clause(x) for x in stmt.children)}), 
-                DTAG.SOURCE_LINE, stmt.line),
-                DTAG.SOURCE_COLUMN, stmt.column
+                DTAG.SOURCE_LINE, stmt.meta.line),
+                DTAG.SOURCE_COLUMN, stmt.meta.column
             )
         elif stmt.data == "greedy_case_stmt":
             case_blocks = {}
@@ -4687,8 +4695,8 @@ class ParseCtx:
                         priorities[k] = int(block.children[0].value)
 
             return ProgramData.imbue(ProgramData.imbue(CaseNode(case_blocks, greedy=True, priorities=priorities), 
-                DTAG.SOURCE_LINE, stmt.line),
-                DTAG.SOURCE_COLUMN, stmt.column
+                DTAG.SOURCE_LINE, stmt.meta.line),
+                DTAG.SOURCE_COLUMN, stmt.meta.column
             )
 
         elif stmt.data == "if_stmt":
@@ -4703,8 +4711,8 @@ class ParseCtx:
                     condition_map[condition] = self._parse_stmt_seq(condition_tree.children[1:])
 
                 ProgramData.imbue(condition,
-                    DTAG.SOURCE_LINE, condition_tree.line,
-                    DTAG.SOURCE_COLUMN, condition_tree.column
+                    DTAG.SOURCE_LINE, condition_tree.meta.line,
+                    DTAG.SOURCE_COLUMN, condition_tree.meta.column
                 )
                 conditions_ordered.append(condition)
             if not isinstance(conditions_ordered[-1], ElseCondition):
@@ -4712,8 +4720,8 @@ class ParseCtx:
                 condition_map[conditions_ordered[-1]] = None
             return ProgramData.imbue(
                 IfElseNode(conditions_ordered, condition_map),
-                DTAG.SOURCE_LINE, stmt.line,
-                DTAG.SOURCE_COLUMN, stmt.column
+                DTAG.SOURCE_LINE, stmt.meta.line,
+                DTAG.SOURCE_COLUMN, stmt.meta.column
             )
         elif stmt.data == "optional_stmt":
             return OptionalNode(self._parse_stmt_seq(stmt.children))
