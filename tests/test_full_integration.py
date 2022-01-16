@@ -42,7 +42,13 @@ def test_full_integration(filename, options, tmpdir):
     with open(filename) as f:
         source = f.read()
 
-    nmfu.ProgramData.load_commandline_flags((*options, *common_flags, filename))
+    lines = source.splitlines(keepends=False)
+    if lines[0].startswith("// args: "):
+        source_args = shlex.split(lines[0][len("// args: "):])
+    else:
+        source_args = []
+
+    nmfu.ProgramData.load_commandline_flags((*options, *source_args, *common_flags, filename))
     nmfu.ProgramData.load_source(source)
 
     pt = nmfu.parser.parse(source, start="start")
