@@ -7,14 +7,17 @@ out bool accept_gzip = false;
 out bool has_etag = false;
 out str[32] etag;
 out enum{GET,POST} method;
-out enum{OK,BADR,URLL,ETAGL,BADM} result;
+//out enum{OK,BADR,URLL,ETAGL,BADM} result;
 out int content_size = 0;
+
+finishcode BADR, URLL, ETAGL, BADM;
 
 // "subroutine"-esque functionality. duplicate states are optimized out.
 //
 // Effectively just substitudes into the ast at the appropriate point.
-macro waitend() {
+macro waitend(finishcode fc) {
     wait "\r\n\r\n";
+	finish fc;
 }
 
 // optional space as in the spec
@@ -23,8 +26,6 @@ macro ows() {
 }
 
 parser { // declare the actual parser
-	result = BADR;
-
     // Each "statement" here is an instruction to the parser. They are followed sequentially.
 
     // Try-catch: add custom error handling behavior. If a parse match error occurs, it will jump to the catch statement.
@@ -39,9 +40,7 @@ parser { // declare the actual parser
             "POST" -> {method = POST;}
             // no else here, so invalid methods will fall back to the catch. We _could_ add a seperate case which sets result as an enum here
             else -> {
-                result = BADM;
-                waitend();
-                finish;
+                waitend(BADM);
             }
         }
 
@@ -53,9 +52,7 @@ parser { // declare the actual parser
             url += /[\/a-zA-Z0-9.\-_?=&+]+/;
         }
         catch (outofspace) {
-            waitend();
-            result = URLL;
-            finish;
+            waitend(URLL);
         }
         // Also note that there's an implicit maximum length here. Violating this will trigger an "outofspace" type error (it is possible to provide a comma separated list of exceptions
         // to handle for a catch).
@@ -79,9 +76,7 @@ parser { // declare the actual parser
                         etag += /([wW]\/)?"([^"]*)"/; // note is is possible to write a regex as /<re>/[<group number>] to only select a specific group.
                     }
                     catch (outofspace) {
-                        waitend();
-                        result = ETAGL;
-                        finish;
+                        waitend(ETAGL);
                     }
 
                     optional { // optional statement, must be decideable at the first character, although this is subject to change and may become similar to 
@@ -119,11 +114,9 @@ parser { // declare the actual parser
         }
 
         // Body parsing is left to the end user.
-        result = OK;
+		finish;
     }
     catch {
-        waitend();
-        result = BADR;
-        finish; // Finish parsing (returns status code "DONE" from the parser function)
+        waitend(BADR); // Finish parsing (returns status code "DONE" from the parser function)
     }
 }

@@ -53,7 +53,7 @@ again:
 	puts("final");
 	printf("state %d\n", state.state);
 #endif
-	printf("method %d; has_gzip %d; has_etag %d; url %s; etag %s; content_size %d; result %d\n", state.c.method, state.c.accept_gzip, state.c.has_etag, state.c.url, state.c.etag, state.c.content_size, state.c.result);
+	printf("method %d; has_gzip %d; has_etag %d; url %s; etag %s; content_size %d\n", state.c.method, state.c.accept_gzip, state.c.has_etag, state.c.url, state.c.etag, state.c.content_size);
 #ifdef NO_UI
 	goto again;
 #endif
@@ -61,21 +61,21 @@ again:
 	printf("and it only uses %lu bytes!\n", sizeof(state));
 	puts("response:");
 
-	if (state.c.result == HTTP_RESULT_URLL) {
+	if (code == HTTP_FINISH_URLL) {
 		puts("HTTP/1.1 414 URI Too Long");
 		puts("Content-Length: 9");
 		puts("Content-Type: text/plain");
 		puts("");
 		puts("too long");
 	}
-	else if (state.c.result == HTTP_RESULT_ETAGL) {
+	else if (code == HTTP_FINISH_ETAGL) {
 		puts("HTTP/1.1 431 Request Header Fields Too Large");
 		puts("Content-Length: 15");
 		puts("Content-Type: text/plain");
 		puts("");
 		puts("too long (etag)");
 	}
-	else if (state.c.result == HTTP_RESULT_BADR || state.c.result == HTTP_RESULT_BADM) {
+	else if (code == HTTP_FINISH_BADR || code == HTTP_FINISH_BADM) {
 		puts("HTTP/1.1 400 Bad Request");
 		puts("Content-Length: 11");
 		puts("Content-Type: text/plain");
