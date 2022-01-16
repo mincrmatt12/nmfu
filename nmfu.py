@@ -941,6 +941,7 @@ class DTAG(enum.Enum):
 
     # Used for tracking action skips
     ACTION_MAY_SKIP = 40
+    ACTION_MAY_RETURN = 41
 
 class ProgramFlag(int, enum.Enum):
     def __new__(cls, value, helpstr="", default=False, implies=(), exclusive_with=()):
@@ -1657,6 +1658,9 @@ class ConditionalAction(Action, HasDefaultDebugInfo):
                                 return True
         return any(x.is_timing_strict() for x in itertools.chain(*self.sub_actions.values()))
 
+    def may_return_early(self):
+        return any(x.may_return_early() for x in self.embeds())
+
     def get_target_override_targets(self):
         tgts = set()
 
@@ -1934,6 +1938,62 @@ class ActionSinkNode(Node):
             self._set_next(new_next)
         else:
             self._set_next(next_node)
+
+class InterruptableActionNode(ActionSinkNode):
+    """
+    Like an action node, but all actions after the first are "deferred" via a fallthrough else transition such that the first action
+    can interrupt the main parser without causing subsequent actions to be missed.
+    """
+
+    def __init__(self, important_action: Optional[Action]):
+        self.important_action = important_action  # if null, this is valid to construct
+        self.following_actions = []
+        self.next = None
+
+    def _as_cleaned(self):
+        newobj = InterruptableActionNode(None)
+        newobj.following_actions = self.following_actions[:]
+        newobj.next = self.next
+        return newobj
+
+    def get_next(self):
+        return self.next
+
+    def _set_next(self, actual_next_node):
+        self.next = actual_next_node
+
+    def _adopt_actions(self, act):
+        self.following_actions.extend(act)
+
+    def convert(self, current_error_handlers: dict):
+        #if self.important_action is not None:
+        #    raise IllegalASTStateError("Action not inherited by node in AST", self.important_action)
+
+        dfa = DFA()
+        start_node = DFProxyState()
+        interrupt_node = DFProxyState()
+        dfa.add(start_node)
+        start_node[DFTransition.Else] = interrupt_node
+        start_node[DFTransition.Else].fallthrough().attach(self.important_action)
+        dfa.add(interrupt_node)
+        trans = DFTransition(on_values=[DFTransition.Else]).fallthrough().attach(*self.following_actions)
+
+        if self.next is None:
+            fake_final = DFState()
+            dfa.add(fake_final)
+            dfa.mark_accepting(fake_final)
+            trans.handles_else().to(fake_final)
+            start_node[DFTransition.Else].handles_else()
+        else:
+            after = self.next.convert(current_error_handlers)
+            for state in after.states:
+                dfa.add(state)
+                if state in after.accepting_states:
+                    dfa.mark_accepting(state)
+            trans.to(after.starting_state)
+        interrupt_node.transition(trans)
+
+        return dfa
 
 class Match(abc.ABC):
     """
@@ -4668,7 +4728,7 @@ class DfaCompileCtx:
                 continue
 
             # Check if the target has a matching fallthrough
-            if isinstance(transition.target, DFConditionPoint): continue
+            if isinstance(transition.target, DFProxyState) and not transition.target.can_eliminate(): continue
 
             effective = set(transition.on_values)
             if DFTransition.Else in transition.on_values:
@@ -4702,9 +4762,7 @@ class DfaCompileCtx:
         # Now, we'll try to remove "dummy states" -- ones that _only_ have an Else fallthrough on them.
         all_transitions = list(self.dfa.all_transitions(include_states=True))
         for orig_state, transition in all_transitions:
-            if transition.is_fallthrough: continue
-
-            if isinstance(transition.target, DFConditionPoint): continue
+            if isinstance(transition.target, DFProxyState) and not transition.target.can_eliminate(): continue
 
             if len(transition.target.transitions) != 1 or DFTransition.Else not in transition.target.transitions[0].on_values:
                 continue
@@ -5399,6 +5457,13 @@ class CodegenCtx:
         except ValueError:
             transition_body.add("// terminating state")
         target_overriden = False
+        needs_early_advance = any(x.may_return_early() for x in transition.actions)
+        immediate_done = transition.target in self.dfa.accepting_states and not ProgramData.do(ProgramFlag.STRICT_DONE_TOKEN_GENERATION) and all(x.error_handling for x in transition.target.transitions)
+        if needs_early_advance and not from_end and not transition.is_fallthrough and not immediate_done:
+            if ProgramData.do(ProgramFlag.INDIRECT_START_PTR):
+                transition_body.add(f"++(*start);");
+            else:
+                transition_body.add(f"++start;");
         # Generate actions
         for action in transition.actions:
             transition_body.add()
@@ -5422,17 +5487,17 @@ class CodegenCtx:
             else:
                 transition_body.add("// fallthrough to terminate")
         # Otherwise, if this state is targeting an accept state, return DONE instead of OK
-        elif transition.target in self.dfa.accepting_states and not ProgramData.do(ProgramFlag.STRICT_DONE_TOKEN_GENERATION) and all(x.error_handling for x in transition.target.transitions):
+        elif immediate_done:
             transition_body.add("// immediately return DONE")
             transition_body.add(f"return {self.program_name.upper()}_DONE;")
         # Normally, though, just generate a jump to the next jpto
         elif not from_end:
             if transition.target in self.dfa.states:
                 if ProgramData.do(ProgramFlag.INDIRECT_START_PTR):
-                    transition_body.add(f"if (++(*start) == end) return {self.program_name.upper()}_OK;");
+                    transition_body.add(f"if ({'++' if not needs_early_advance else ''}(*start) == end) return {self.program_name.upper()}_OK;");
                     transition_body.add("inval = **start;")
                 else:
-                    transition_body.add(f"if (++start == end) return {self.program_name.upper()}_OK;");
+                    transition_body.add(f"if ({'++' if not needs_early_advance else ''}start == end) return {self.program_name.upper()}_OK;");
                     transition_body.add("inval = *start;")
                 if self._transition_will_directly_jump(transition):
                     transition_body.add(f"goto jpto_{self.dfa.states.index(transition.target)};");
@@ -5527,15 +5592,28 @@ class CodegenCtx:
             result.add(f"return {self.program_name.upper()}_OK;")
         return result.value()
 
+    def _needs_end_check(self):
+        if ProgramData.do(ProgramFlag.ZERO_LEN_INPUT_SUPPORT):
+            return True
+
+        for trans in self.dfa.all_transitions():
+            if any(x.may_return_early() for x in trans.actions):
+                return True
+        return False
+
     def _generate_feed_implementation(self):
         result = Outputter()
 
         start_typename = "const uint8_t *" if not ProgramData.do(ProgramFlag.INDIRECT_START_PTR) else "const uint8_t **";
         result.add(f"{self.program_name}_result_t {self.program_name}_feed({start_typename}start, const uint8_t *end, {self.program_name}_state_t *state) {{")
         with result as contents:
+            if self._needs_end_check():
+                contents.add(f"if ({'*start' if ProgramData.do(ProgramFlag.INDIRECT_START_PTR) else 'start'} == end) return {self.program_name.upper()}_OK;")
+                contents.add()
+                # Generate an explicit input check 
             # Generate the `inval` variable
-            contents.add("uint8_t inval = " + ("**start" if ProgramData.do(ProgramFlag.INDIRECT_START_PTR) else "*start") + ";");
-            contents.add();
+            contents.add("uint8_t inval = " + ("**start" if ProgramData.do(ProgramFlag.INDIRECT_START_PTR) else "*start") + ";")
+            contents.add()
             # Generate a target for states with actions that modify the state in an unpredictable way
             contents.add("repeatswitch:");
             # The body of feed is a massive switch statement that has a bunch of internal gotos
