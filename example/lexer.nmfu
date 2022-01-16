@@ -1,0 +1,22 @@
+// args: -fyield-support
+
+yieldcode LP, RP, SYMBOL, INTEGER, DEFINE, DISPLAY, _RESET;
+
+parser {
+	loop {
+		greedy case {
+			// emit to advance start ptr
+			/\s+/ -> {yield _RESET;}
+			"(" -> {yield LP;}
+			")" -> {yield RP;}
+			/\w*[a-zA-Z_]\w*/ -> {yield SYMBOL;}
+			/-?\d+/ -> {yield INTEGER;}
+
+			// keywords
+			prio 1 {
+				"define" -> {yield DEFINE;}
+				"display" -> {yield DISPLAY;}
+			}
+		}
+	}
+}

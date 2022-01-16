@@ -1,3 +1,7 @@
 *.c
 *.h
 !http_test.c
+!lexer_test.c
+
+a.out
+.gdb_history
