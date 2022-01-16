@@ -1,5 +1,7 @@
 site_name: nmfu
-theme: readthedocs
+theme:
+  name: readthedocs
+  highlightjs: false
 
 nav:
   - Home: 'index.md'
@@ -11,5 +13,12 @@ nav:
     - 'Generated Code': 'user-ref/generated-code.md'
     - 'Command Line Options': 'user-ref/cli.md'
 
+
 markdown_extensions:
   - admonition
+  - pymdownx.highlight:
+      anchor_linenums: true
+      css_class: hcode
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
