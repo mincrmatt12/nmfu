@@ -895,8 +895,9 @@ class DFA:
                 sub_state.transition(new_transition, allow_replace_if=lambda x: x.error_handling or x.target in valid_replacers)
 
         # Adopt all the states
-        while chained_dfa.states:
-            self.add(chained_dfa.states.pop())
+        for state in chained_dfa.states:
+            if state not in self.states:
+                self.add(state)
 
         # Finally, mark all the sub_states as no longer accept states, and mark the new accept states thus
         if mark_accept:
