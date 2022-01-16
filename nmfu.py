@@ -715,6 +715,7 @@ class DFA:
             if state in visited:
                 return
             visited.add(state)
+            yield state
 
             for t in state.all_transitions():
                 use_real = True
@@ -722,19 +723,18 @@ class DFA:
                     if action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_OTHER:
                         use_real = False
                         for tgt in action.get_target_override_targets():
-                            aux(tgt)
+                            yield from aux(tgt)
                         break
                     elif action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_UNDEFINED:
                         use_real = False
                         break
                     elif action.get_target_override_mode() == ActionOverrideMode.MAY_GOTO_TARGET:
                         for tgt in action.get_target_override_targets():
-                            aux(tgt)
+                            yield from aux(tgt)
                 if use_real:
-                    aux(t.target)
+                    yield from aux(t.target)
 
-        aux(self.starting_state)
-        return visited
+        yield from aux(self.starting_state)
 
     def error_handling_transitions(self, include_states=False):
         """
@@ -779,7 +779,7 @@ class DFA:
         result = set()
 
         for t in self.all_transitions():
-            if action in itertools.chain(*(x.all_subactions() for x in t.actions)):
+            if action in t.actions:
                 result.add(t)
 
         return result
@@ -3797,6 +3797,13 @@ class LoopNode(ActionSinkNode, ActionSourceNode):
             transition.actions.extend(self.after_break_actions)
             should_try_to_append = True
 
+        # Check if any actions are break actions
+        for transition in sub_dfa.all_transitions():
+            for action in transition.actions:
+                for subaction in action.all_subactions():
+                    if subaction == self.break_action:
+                        should_try_to_append = True
+
         if self.break_action in self.loop_start_actions:
             should_try_to_append = True
         else:
@@ -4803,7 +4810,7 @@ class DfaCompileCtx:
     def _optimize_remove_inaccessible(self):
         if not ProgramData.do(ProgramFlag.REMOVE_INACCESIBLE_STATES):
             return 0
-        accessible = self.dfa.dfs()
+        accessible = set(self.dfa.dfs())
         mod = 0
         for i in self.dfa.states.copy():
             if i not in accessible:

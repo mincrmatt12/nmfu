@@ -63,12 +63,12 @@ def test_dfa_dfs_with_actions():
     s1['a'] = s2
     s2['b'] = s1
 
-    assert dfa.dfs() == {s1, s2}
+    assert set(dfa.dfs()) == {s1, s2}
 
     s2['b'].attach(nmfu.AppendTo(s3, None))
 
-    assert dfa.dfs() == {s1, s2, s3}
+    assert set(dfa.dfs()) == {s1, s2, s3}
 
     s1['a'].attach(nmfu.FinishAction())
 
-    assert dfa.dfs() == {s1}
+    assert set(dfa.dfs()) == {s1}
