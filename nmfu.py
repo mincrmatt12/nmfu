@@ -515,32 +515,26 @@ class DFState:
                 local_alphabet.add(i)
         return local_alphabet
 
-class DFConditionPoint(DFState):
+class DFProxyState(DFState):
     """
-    Represents a single "condition point": a node which only has fallthrough conditional-transitions. A conditional-transition
-    doesn't match input, rather it just selects some unambiguous path to continue on
+    Represents a state that only contains the equivalent of a fallthrough else
+    tansition to another state; in other words a pure "proxy" to another state, potentially
+    with some number of actions/conditions. 
+
+    Note this class on its own does not _enforce_ these constraints, and will break if used in a way that
+    violates them.
     """
 
-    def __init__(self):
-        super().__init__()
-        self.transitions = []
+    def can_eliminate(self):
+        """
+        Can this node be eliminated?
+        """
 
-    def transition(self, transition):
-        if not isinstance(transition, DFConditionalTransition):
-            raise IllegalDFAStateError("Invalid normal transition on condition point", self)
-        if transition in self.transitions:
-            return
-        if ProgramData.lookup(transition, DTAG.PARENT) is None: 
-            ProgramData.imbue(transition, DTAG.PARENT, self)
-        # TODO: conflicts
-        self.transitions.append(transition)
+        for transition in self.all_transitions():
+            if transition.actions:
+                return False
 
-    def __getitem__(self, key): # pragma: no cover
-        raise NotImplementedError()
-    def __delitem__(self, key): # pragma: no cover
-        raise NotImplementedError()
-    def __setitem__(self, key): # pragma: no cover
-        raise NotImplementedError()
+        return True
 
     def equivalent_on_values(self):
         r"""
@@ -569,7 +563,7 @@ class DFConditionPoint(DFState):
             if state in visited:
                 return
             visited.add(state)
-            if isinstance(state, DFConditionPoint):
+            if isinstance(state, DFProxyState):
                 for t in state.all_transitions():
                     aux(t.target)
                     # Also consider actions with overrides
@@ -599,6 +593,37 @@ class DFConditionPoint(DFState):
         candidate_else.difference_update(filtered)
 
         return encountered, candidate_else
+
+
+class DFConditionPoint(DFProxyState):
+    """
+    Represents a single "condition point": a node which only has fallthrough conditional-transitions. A conditional-transition
+    doesn't match input, rather it just selects some unambiguous path to continue on
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.transitions = []
+
+    def transition(self, transition):
+        if not isinstance(transition, DFConditionalTransition):
+            raise IllegalDFAStateError("Invalid normal transition on condition point", self)
+        if transition in self.transitions:
+            return
+        if ProgramData.lookup(transition, DTAG.PARENT) is None: 
+            ProgramData.imbue(transition, DTAG.PARENT, self)
+        # TODO: conflicts
+        self.transitions.append(transition)
+
+    def __getitem__(self, key): # pragma: no cover
+        raise NotImplementedError()
+    def __delitem__(self, key): # pragma: no cover
+        raise NotImplementedError()
+    def __setitem__(self, key): # pragma: no cover
+        raise NotImplementedError()
+
+    def can_eliminate(self):
+        return False
         
 
 class DFA:
@@ -785,20 +810,22 @@ class DFA:
         if chain_actions is None:
             chain_actions = []
 
-        if isinstance(chained_dfa.starting_state, DFConditionPoint):
+        if isinstance(chained_dfa.starting_state, DFProxyState):
             # Add an extra state that will represent the condition point properly (see docs for equivalent_on_values)
             valid, to_else = chained_dfa.starting_state.equivalent_on_values()
-            fake_start = DFState()
-            chained_dfa.add(fake_start)
-            # If there were any actual states, tie them
             if valid and to_else:
-                fake_start[valid] = chained_dfa.starting_state
-                fake_start[to_else] = error_handling_state
-                fake_start[valid].fallthrough(True)
-                fake_start[to_else].fallthrough(True).handles_else()
-            else:
-                raise IllegalDFAStateError("Conditional block with no DFA cannot be appended", chained_dfa)
-            chained_dfa.starting_state = fake_start
+                fake_start = DFState()
+                chained_dfa.add(fake_start)
+
+                # Tie them separately; note this will cause things to go wrong in certain cases
+                # with conditionals; but we generally don't deal with those
+                if valid:
+                    fake_start[valid] = chained_dfa.starting_state
+                    fake_start[valid].fallthrough(True)
+                if to_else:
+                    fake_start[to_else] = error_handling_state
+                    fake_start[to_else].fallthrough(True).handles_else()
+                chained_dfa.starting_state = fake_start
 
         # Check for ambiguity: if any transitions added to a sub_state try to redirect a valid character a different valid
         # state, there is ambiguity. In other words, we only want to add transitions that would previously lead to the error state.
