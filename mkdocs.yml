@@ -3,6 +3,8 @@ theme:
   name: readthedocs
   highlightjs: false
 
+extra_css: ['css/extra.css']
+
 nav:
   - Home: 'index.md'
   - Tutorials:
@@ -19,6 +21,7 @@ markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
       css_class: hcode
+      noclasses: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences

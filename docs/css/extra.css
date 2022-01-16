@@ -1,0 +1,7 @@
+.hcode pre {
+	margin-bottom: 1rem !important;
+}
+
+.hcode pre code {
+	color: black;
+}
