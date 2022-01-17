@@ -51,12 +51,15 @@ macro_decl: "macro" IDENTIFIER macro_args "{" statement* "}"
 macro_args: "(" macro_arg ("," macro_arg)* ")"
           | "(" ")" -> macro_arg_empty
 
-macro_arg: "macro" IDENTIFIER -> macro_macro_arg
-         | "out"   IDENTIFIER -> macro_out_arg
-         | "match" IDENTIFIER -> macro_match_expr_arg
-         | "expr"  IDENTIFIER -> macro_int_expr_arg
-         | "hook"  IDENTIFIER -> macro_hook_arg
-         | "loop"  IDENTIFIER -> macro_breaktgt_arg
+macro_arg: "macro"     IDENTIFIER -> macro_macro_arg
+         | "out"       IDENTIFIER -> macro_out_arg
+         | "match"     IDENTIFIER -> macro_match_expr_arg
+         | "expr"      IDENTIFIER -> macro_int_expr_arg
+         | "hook"      IDENTIFIER -> macro_hook_arg
+         | "loop"      IDENTIFIER -> macro_breaktgt_arg
+		 | RESULT_CODE IDENTIFIER -> macro_rescode_arg
+
+RESULT_CODE: /yieldcode|finishcode/
 ```
 
 For example:
@@ -96,6 +99,7 @@ There are 6 types of arguments:
 - `match`: an arbitrary _match-expression_
 - `expr`: an arbitrary _integer-expression_
 - `loop`: an arbitrary named _loop-statement_, for use in _break-statements_.
+- `finishcode`/`yieldcode`: an arbitrary _result-code_ of the given type.
 
 ### Hooks
 
@@ -109,6 +113,23 @@ For example:
 
 ```nmfu
 hook got_header;
+```
+
+### Custom Result Codes
+
+Both _finish-statements_ and _yield-statements_ take (optionally for the former) a _result-code_ to return. These are declared using the _result-code-declaration_: 
+
+```lark
+code_decl: RESULT_CODE IDENTIFIER ("," IDENTIFIER)* ";"
+
+RESULT_CODE: /yieldcode|finishcode/
+```
+
+For example:
+
+```nmfu
+finishcode TOO_BIG;
+yieldcode GOT_HEADER, GOT_BODY;
 ```
 
 ## Parser Declaration
@@ -133,6 +154,8 @@ simple_stmt: expr -> match_stmt
            | "break" IDENTIFIER? -> break_stmt
            | "delete" IDENTIFIER -> delete_stmt
            | "finish" -> finish_stmt
+           | "finish" IDENTIFIER -> custom_finish_stmt
+           | "yield" IDENTIFIER -> custom_yield_stmt
            | "wait" expr -> wait_stmt
 ```
 
@@ -151,7 +174,11 @@ If a hook and macro have the same name, the macro will take priority. Priority i
 
 The _break-statement_ is explained along with loops in a later section.
 
-The _finish-statement_ causes the parser to immediately stop and return a `DONE` status code, which should be interpreted by the calling application as a termination condition.
+The _finish-statement_ causes the parser to immediately stop and return a `DONE` status code, which should be interpreted by the calling application as a termination condition. Alternatively,
+a custom _result-code_ can be provided, which the parser will return instead of `DONE`.
+
+The _yield-statement_ is similar, except it _must_ be provided with a _result-code_, and instead of the returned code indicating termination, it instead acts like an `OK` status code,
+indicating some application-specific state but that parsing can and should still continue.
 
 The _wait-statement_ spins and consumes input until the _match-expression_ provided matches successfully. Importantly, no event (including end of input!) can stop the
 wait statement, which makes it useful primarily in error handlers. 
@@ -272,12 +299,17 @@ Block statements are statements which contain a block of other statements:
 ```lark
 block_stmt: "loop" IDENTIFIER? "{" statement+ "}" -> loop_stmt
           | "case" "{" case_clause+ "}" -> case_stmt
+          | "greedy" "case" "{" greedy_prio_block+ "}" -> greedy_case_stmt
           | "optional" "{" statement+ "}" -> optional_stmt
           | "try" "{" statement+ "}" catch_block -> try_stmt
           | "foreach" "{" statement+ "}" "do" "{" foreach_actions "}" -> foreach_stmt
           | "if" if_condition ("elif" if_condition)* else_condition? -> if_stmt
 
 catch_block: "catch" catch_options? "{" statement* "}"
+
+?greedy_prio_block: "prio" NUMBER case_clause
+                  | "prio" NUMBER "{" case_clause+ "}"
+                  | case_clause
 
 case_clause: case_predicate ("," case_predicate)* "->" "{" statement* "}"
 case_predicate: "else" -> else_predicate
@@ -311,6 +343,32 @@ case {
 ```
 
 The special constant "else" means anything not matched by any of the other clauses.
+
+_greedy-case-statements_ are a special version of _case-statements_. Instead of disallowing all ambiguity, _greedy-case-statements_ follow two rules:
+
+- In a conflict where one match could end but another could continue, the finishing match wins
+- In a conflict where two or more matches could end on the same character, the one with the greatest priority wins. If there is no match
+with highest priority, an error is raised.
+
+Priority is assigned with the _greedy-priority-declaration_; if unspecified, priority defaults to 0.
+
+For example:
+
+```nmfu
+greedy case {
+	/\s+/ -> {yield _RESET;}
+	"(" -> {yield LP;}
+	")" -> {yield RP;}
+	/\w*[a-zA-Z_]\w*/ -> {yield SYMBOL;}
+	/-?\d+/ -> {yield INTEGER;}
+
+	prio 1 {
+	    // higher priority over "SYMBOL"
+		"define" -> {yield DEFINE;}
+		"display" -> {yield DISPLAY;}
+	}
+}
+```
 
 _try-except-statements_ can redirect certain error conditions to the beginning of a different block. They follow the general structure of
 
