@@ -1,11 +1,13 @@
 // ok: text
-// ok: --
+// finish-A: --
 // bad: -
+
+finishcode A;
 
 parser {
     optional {
         "--";
-        finish;
+        finish A;
     }
     "text";
 }

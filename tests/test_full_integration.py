@@ -128,6 +128,20 @@ def test_ok(filename):
 
     testcases = []
 
+    while lines[i].startswith("// finish-"):
+        line = lines[i][len("// finish-"):]
+        code = line[:line.index(":")]
+        tcase = line[line.index(" ")+1:]
+        testcases.append((code, tcase))
+        i += 1
+
+    for targetcode, case in testcases:
+        res = final_dfa.simulate(case)
+        assert isinstance(res, nmfu.CustomFinishAction)
+        assert res.result_code == targetcode
+
+    testcases = []
+
     while lines[i].startswith("// bad: "):
         testcases.append(lines[i][len("// bad: "):])
         i += 1

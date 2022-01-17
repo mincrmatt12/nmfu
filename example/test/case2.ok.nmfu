@@ -1,18 +1,27 @@
 // ok: hrrllp you
 // ok: concat eexpr yay
+// finish-A: help you
+// finish-A: hrrrralp you
+// finish-B: concat eexpr yay
+// finish-C: hrrrl gg ffe
+// bad: concarf
+
+finishcode A, B, C;
 
 parser {
     case {
         "help", /hr+.lp/ -> {
             " you";
+			finish A;
         }
         ("concat " /e+xpr/) -> {
             " yay";
+			finish B;
         }
         else -> {
-            wait "\r\n";
+            wait "ff";
             "e";
+			finish C;
         }
     }
-    finish;
 }
