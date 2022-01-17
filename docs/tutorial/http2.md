@@ -56,8 +56,8 @@ uri_too_long = true;
 waitend();
 ```
 
-Since our header parsing is going to add more error conditions, let's replace the ad-hoc boolean flag with an `error_code`
-enum:
+Since our header parsing is going to add more error conditions, it'd be nice to consolidate all the error conditions.
+One approach we could use would be to replace the ad-hoc boolean flag with an `error_code` enum:
 
 ```nmfu
 out enum{OK, URI_TOO_LONG} result_code;
@@ -87,6 +87,42 @@ catch (outofspace) {
 !!! note
     We won't cover the C implementation of reading this enum here; if you can't figure it out go back to the previous
     tutorial and read the section on handling HTTP request methods again -- the technique here is very similar.
+
+NMFU, however, provides a more intelligent system for this. Consider this slightly different version of the above example:
+
+```nmfu
+finishcode URI_TOO_LONG;
+
+macro waitend(finishcode result) {
+	wait "\r\n\r\n";
+	finish result;
+}
+
+parser {
+	// .. parser code ..
+	catch (outofspace) {
+		waitend(URI_TOO_LONG);
+	}
+}
+```
+
+The `finishcode` directive defines an additional result that the `http_feed` function can return. When a statement like `finish URI_TOO_LONG;` is executed, instead
+of simply returning `HTTP_DONE`, it instead returns `HTTP_FINISH_URI_TOO_LONG`. This lets us clean up the C side of our HTTP parser:
+
+```c
+switch (http_server_feed(&parser, buf, buf + count)) {
+	case HTTP_SERVER_OK:
+		continue;
+	case HTTP_SERVER_FAIL:
+		printf("HTTP/1.1 400 Bad Request\r\n\r\n");
+		return 0;
+	case HTTP_SERVER_FINISH_URI_TOO_LONG:
+		printf("HTTP/1.1 414 URI Too Long\r\n\r\n");
+		return 0;
+	case HTTP_SERVER_OK:
+		goto finished;
+}
+```
 
 ## Basic Authorization
 
@@ -127,7 +163,7 @@ formatted authorization (we'll leave verifying interpretable credentials to the 
 
 ```nmfu
 out str[60] auth_payload;
-out enum{OK, URI_TOO_LONG, MALFORMED_AUTH} result_code;
+finishcode URI_TOO_LONG, MALFORMED_AUTH;
 ```
 
 Then, we'll fill in the case handler:

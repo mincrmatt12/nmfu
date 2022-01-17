@@ -92,7 +92,7 @@ Updating our example, we might have something like
          case HTTP_SERVER_FAIL:
             fprintf(stderr, "invalid input");
             return;
-         case HTTP_SERVER_OK:
+         case HTTP_SERVER_DONE:
             goto finished;
       }
    }
@@ -137,7 +137,7 @@ int main() {
          case HTTP_SERVER_FAIL:
             fprintf(stderr, "invalid input");
             return 2;
-         case HTTP_SERVER_OK:
+         case HTTP_SERVER_DONE:
             goto finished;
       }
    }
