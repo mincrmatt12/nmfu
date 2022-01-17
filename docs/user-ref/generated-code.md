@@ -62,11 +62,18 @@ or added as members to the state object as function pointers (with the same sign
 of the `c` sub-struct, depending on command line options.
 
 One additional enumeration is always defined, called `{parser_name}_result_t` which contains the various result codes from NMFU-generated functions.
-These contain the values `{parser_name}_DONE`, `{parser_name}_OK` and `{parser_name}_FAIL`, for example `HTTP_OK`.
+These contain (at minimum) the values `{parser_name}_DONE`, `{parser_name}_OK` and `{parser_name}_FAIL`, for example `HTTP_OK`.
 
 - `OK` means that more input should be sent.
 - `FAIL` means that the parser has entered a failing state. This is the default behaviour if no _try-except-statement_ is present.
 - `DONE` means that either a _finish-statement_ executed or the parser has reached the end of it's statements.
+
+Additional result codes declared in the parser are returned with values of the form `{parser_name}_FINISH_{code_name}`, for example `HTTP_FINISH_TOO_LONG`. These behave semantically
+like `DONE`.
+
+Yield result codes behave somewhat `OK` semantically, except that instead of providing more input, the parser should be re-invoked with the start pointer left as-is. Note
+that yield support requires the indirect start pointer mode to properly communicate where the start pointer is. The values returned for yields are of the form `{parser_name}_YIELD_{code_name}`, for example
+`HTTP_YIELD_GOT_URL`.
 
 ## Example Usage
 
@@ -93,5 +100,5 @@ http_result_t code = http_end(&state);
 http_free(&state);
 ```
 
-A more complete example is present in `example/http_test.c`.
+A more complete example is present in `example/http_test.c`, as well as a demonstration of the yield functionality in `example/lexer_test.c`.
 

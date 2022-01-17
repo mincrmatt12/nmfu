@@ -43,6 +43,12 @@ will be incremented as characters are read. The final value depends on the retur
 This can be useful for sending data after a parser error to an external error handler, or for
 correctly dealing with sequential messages.
 
+## Yield Support
+
+To use the `yield` statement, support for it must be explicitly enabled with the `-fyield-support` flag. This also enables
+the indirect start pointer mode, since for yielding to not cause an infinite loop, the parser must be able to communicate
+back to the calling code how much it has parsed.
+
 ## Per-instance Hooks
 
 By default, hooks are declared as global functions, however the `-fhook-per-state` instead adds them
@@ -57,3 +63,9 @@ for properly handing truncated messages in certain contexts.
 A future version will likely generalize this mechanism to allow for "events", e.g.
 "serial parity error" or "connection idle" injected in a similar way (or perhaps
 as exceptions).
+
+!!! warning
+    The current incarnation of EOF might disappear soon, as it's rather clunky and under maintained at the moment. While custom events are still on the table,
+    "end of input" will likely not stay as a matched character, since in theory it should always be the last event to occur. It will likely become a new
+    type of exception at some point, with strict rules on what is allowed in any handlers for it, and the `-feof-support` flag will likely just control
+    whether or not an `_end` function is generated.
