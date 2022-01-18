@@ -367,6 +367,8 @@ greedy case {
 		"define" -> {yield DEFINE;}
 		"display" -> {yield DISPLAY;}
 	}
+
+	prio 2 "critical" -> {} // highest priority
 }
 ```
 

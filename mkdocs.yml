@@ -10,6 +10,7 @@ nav:
   - Tutorials:
     - 'Simple HTTP': 'tutorial/http1.md'
     - 'Simple HTTP, continued': 'tutorial/http2.md'
+    - 'A basic lexer': 'tutorial/lexer.md'
   - 'User Reference':
     - 'Parser Specification': 'user-ref/parser.md'
     - 'Generated Code': 'user-ref/generated-code.md'
