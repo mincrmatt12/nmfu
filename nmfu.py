@@ -5,7 +5,7 @@ NMFU - the "no memory for you" "parser" generator.
 designed to create what a compsci major would yell at me for calling a dfa to parse files/protocols character by character while using as little
 RAM as possible.
 
-Copyright (C) 2020-2021 Matthew Mirvish
+Copyright (C) 2020-2022 Matthew Mirvish
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -1205,7 +1205,7 @@ class ProgramData:
     @classmethod
     def _print_version(cls): 
         print("nmfu", __version__)
-        print("Copyright (C) 2020-2021 Matthew Mirvish")
+        print("Copyright (C) 2020-2022 Matthew Mirvish")
         print("This is free software; see the source for copying conditions.  There is NO")
         print("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.")
 
