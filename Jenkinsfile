@@ -86,7 +86,7 @@ pipeline {
 					agent {
 						docker {
 							label "docker && linux"
-							image 'cibuilds/snapcraft:core18'
+							image 'cibuilds/snapcraft:core20'
 							args "-u 0:0"
 						}
 					}
