@@ -11,7 +11,7 @@ _the "no memory for you" "parser" generator_
 
 `nmfu` attempts to turn a parser specified as a procedural matching thing into a state machine, parsing protocols with minimal memory and in arbitrarily sized chunks.
 
-There are a number of examples present in the `examples/` folder, as well as documentation and a tutorial available on [readthedocs](nmfu.rtfd.io).
+There are a number of examples present in the `examples/` folder, as well as documentation and a tutorial available on [readthedocs](https://nmfu.rtfd.io).
 
 ## Plugins
 
