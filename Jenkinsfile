@@ -49,7 +49,6 @@ pipeline {
 				message 'Release this version of NMFU?'
 				ok 'Yes, do it!' 
 				parameters {
-					choice(choices: ['stable', 'candidate', 'beta'], description: 'Which release channel should the snap be sent to?', name: 'SNAPCRAFT_RELEASE_CHANNEL')
 					choice(choices: ['pypi', 'testpypi'], description: 'Which registry should the package be sent to?', name: 'PYPI_REPOSITORY_NAME')
 				}
 				submitter 'matthew'
@@ -80,33 +79,6 @@ pipeline {
 					steps {
 						sh "appimage-builder"
 						archiveArtifacts "*.AppImage"
-					}
-				}
-				stage ('Upload Snap') {
-					agent {
-						docker {
-							label "docker && linux"
-							image 'cibuilds/snapcraft:core20'
-							args "-u 0:0"
-						}
-					}
-					environment {
-						SNAP_LOGIN_FILE = credentials('snapcraft-login')
-					}
-					steps {
-						dir("snapbuild") {
-							sh "rm *.snap || true"
-							sh "cp ../README.md ../nmfu.py ../setup.py ../snapcraft.yaml ."
-							sh "apt-get update && snapcraft"
-							archiveArtifacts artifacts: '*.snap'
-							sh "snapcraft login --with $SNAP_LOGIN_FILE"
-							sh "snapcraft upload --release $SNAPCRAFT_RELEASE_CHANNEL *.snap"
-						}
-					}
-					post {
-						always {
-							sh "chmod -R a+rw \$PWD/"
-						}
 					}
 				}
 			}
