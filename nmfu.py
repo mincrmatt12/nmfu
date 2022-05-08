@@ -6015,7 +6015,7 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
                     is_real = False
                     break
             if is_real:
-                g.edge(str(id(state)), str(id(transition.target)), label=label, style="dashed" if transition.is_fallthrough else "solid")
+                g.edge(str(id(state)), str(id(transition.target)), label=label, style="dashed" if transition.is_fallthrough else "solid", color = "orange" if transition.error_handling else "black")
 
     for v in ignored_transitions:
         values, target = v
