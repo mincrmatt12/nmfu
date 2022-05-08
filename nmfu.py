@@ -4898,7 +4898,7 @@ class DfaCompileCtx:
                 continue
 
             # Check if the target has a matching fallthrough
-            if isinstance(transition.target, DFProxyState) and not transition.target.can_eliminate(): continue
+            if isinstance(transition.target, DFProxyState) and not transition.target.can_eliminate() or isinstance(orig_state, DFProxyState) and not orig_state.can_eliminate(): continue
 
             effective = set(transition.on_values)
             if DFTransition.Else in transition.on_values:
@@ -4932,7 +4932,7 @@ class DfaCompileCtx:
         # Now, we'll try to remove "dummy states" -- ones that _only_ have an Else fallthrough on them.
         all_transitions = list(self.dfa.all_transitions(include_states=True))
         for orig_state, transition in all_transitions:
-            if isinstance(transition.target, DFProxyState) and not transition.target.can_eliminate(): continue
+            if isinstance(transition.target, DFProxyState) and not transition.target.can_eliminate() or isinstance(orig_state, DFProxyState) and not orig_state.can_eliminate(): continue
 
             if len(transition.target.transitions) != 1 or DFTransition.Else not in transition.target.transitions[0].on_values:
                 continue
