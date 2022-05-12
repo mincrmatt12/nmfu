@@ -51,7 +51,7 @@ def test_dfa_append_after_simple():
     match1 = nmfu.DirectMatch("abc").convert(defaultdict(lambda: error_state))
     match2 = nmfu.DirectMatch("def").convert(defaultdict(lambda: error_state))
     
-    match1.append_after(match2, error_state)
+    match1.append_after(match2)
 
     assert match1.simulate("abcdef") in match1.accepting_states
     assert match1.simulate("abc") not in match1.accepting_states
@@ -62,7 +62,7 @@ def test_dfa_append_after_simple():
     # try with actions
     act = [nmfu.FinishAction()]
 
-    match1.append_after(match2, error_state, chain_actions=act)
+    match1.append_after(match2, chain_actions=act)
 
     target = match1.simulate("abc")
     assert act[0] in target["d"].actions
