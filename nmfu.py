@@ -625,7 +625,6 @@ class DFConditionPoint(DFProxyState):
             return
         if ProgramData.lookup(transition, DTAG.PARENT) is None: 
             ProgramData.imbue(transition, DTAG.PARENT, self)
-        # TODO: conflicts
         self.transitions.append(transition)
 
     def __getitem__(self, key): # pragma: no cover
