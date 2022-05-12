@@ -818,7 +818,7 @@ class DFA:
 
         return False
 
-    def append_after(self, chained_dfa: "DFA", error_handling_state: DFState, sub_states=None, mark_accept=True, chain_actions=None):
+    def append_after(self, chained_dfa: "DFA", sub_states=None, mark_accept=True, chain_actions=None):
         """
         Add the chained_dfa in such a way that its start state "becomes" all of the `sub_states` (or if unspecified, the accept states of _this_ dfa)
 
@@ -847,7 +847,7 @@ class DFA:
                     fake_start[valid] = chained_dfa.starting_state
                     fake_start[valid].fallthrough(True)
                 if to_else:
-                    fake_start[to_else] = error_handling_state
+                    fake_start[to_else] = chained_dfa.starting_state
                     fake_start[to_else].fallthrough(True).handles_else()
                 chained_dfa.starting_state = fake_start
 
@@ -907,7 +907,6 @@ class DFA:
                     dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("TT", transition)
                     dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("TA", targets)
                     dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("RV", relevant_values)
-                    dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("TE", error_handling_state)
                     raise IllegalDFAStateConflictsError("Ambiguous transitions detected while joining DFAs", sub_state, transition)
 
                 # Create transition to add
@@ -3374,7 +3373,7 @@ class ConcatMatch(Match):
         # convert in order
         sm = self.sub_matches[0].convert(current_error_handlers)
         for i in self.sub_matches[1:]:
-            sm.append_after(i.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH])
+            sm.append_after(i.convert(current_error_handlers))
         return sm
 
 class MatchNode(ActionSinkNode):
@@ -3400,7 +3399,7 @@ class MatchNode(ActionSinkNode):
     def convert(self, current_error_handlers: dict):
         base_dfa = self.match.convert(current_error_handlers)
         if self.next is not None:
-            base_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH])
+            base_dfa.append_after(self.next.convert(current_error_handlers))
         return base_dfa
 
 class CaseNode(Node):
@@ -3703,12 +3702,12 @@ class CaseNode(Node):
                         j.attach(*self.case_match_actions[true_backref], prepend=True)
             else:
                 refers_to = sub_dfas[original_backreference[i]]
-                decider_dfa.append_after(refers_to, current_error_handlers[ErrorReasons.NO_MATCH], sub_states=corresponding_finish_states[i], chain_actions=self.case_match_actions[original_backreference[i]])
+                decider_dfa.append_after(refers_to, sub_states=corresponding_finish_states[i], chain_actions=self.case_match_actions[original_backreference[i]])
 
         ProgramData.imbue(decider_dfa, DTAG.PARENT, self)
 
         if self.next is not None:
-            decider_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH])
+            decider_dfa.append_after(self.next.convert(current_error_handlers))
         
         return decider_dfa
 
@@ -3748,7 +3747,7 @@ class OptionalNode(ActionSinkNode):
 
         # If we need to, add a boring after thing
         if self.next is not None:
-            sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH], chain_actions=self.finish_actions)
+            sub_dfa.append_after(self.next.convert(current_error_handlers), chain_actions=self.finish_actions)
         else:
             sub_dfa.chain_actions_at_end(self.finish_actions)
 
@@ -3800,7 +3799,7 @@ class LoopNode(ActionSinkNode, ActionSourceNode):
         parent_dfa.mark_accepting(self.end_state)
 
         if self.next:
-            parent_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH])
+            parent_dfa.append_after(self.next.convert(current_error_handlers))
         
         # First, create the sub_dfa 
         sub_dfa = self.child_node.convert(current_error_handlers)
@@ -3914,7 +3913,7 @@ class TryExceptNode(ActionSinkNode, ActionSourceNode):
         # If there _is_ a handler, add it after
         if self.handler is not None:
             handler_dfa = self.handler.convert(current_error_handlers)
-            sub_dfa.append_after(handler_dfa, current_error_handlers[ErrorReasons.NO_MATCH], sub_states=[self.handler_node], chain_actions=self.incoming_handler_actions)
+            sub_dfa.append_after(handler_dfa, sub_states=[self.handler_node], chain_actions=self.incoming_handler_actions)
         else:
             # Otherwise, just mark the handler as a finish state
             sub_dfa.mark_accepting(self.handler_node)
@@ -3924,7 +3923,7 @@ class TryExceptNode(ActionSinkNode, ActionSourceNode):
 
         # If there is a next node, append it
         if self.next is not None:
-            sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH], chain_actions=self.after_actions)
+            sub_dfa.append_after(self.next.convert(current_error_handlers), chain_actions=self.after_actions)
         else:
             sub_dfa.chain_actions_at_end(self.after_actions)
 
@@ -3975,7 +3974,7 @@ class ForeachNode(ActionSinkNode, ActionSourceNode):
                 transition.attach(*self.each_actions, prepend=True)
 
         if self.next is not None:
-            sub_dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH], chain_actions=self.after_actions)
+            sub_dfa.append_after(self.next.convert(current_error_handlers), chain_actions=self.after_actions)
         else:
             sub_dfa.chain_actions_at_end(self.after_actions)
 
@@ -4054,7 +4053,7 @@ class IfElseNode(ActionSinkNode, ActionSourceNode):
                 cond_point.transition(DFConditionalTransition(x).attach(*self.branch_actions[x]).to(dummy_target))
 
         if self.next is not None:
-            dfa.append_after(self.next.convert(current_error_handlers), current_error_handlers[ErrorReasons.NO_MATCH], chain_actions=self.after_actions)
+            dfa.append_after(self.next.convert(current_error_handlers), chain_actions=self.after_actions)
         else:
             dfa.chain_actions_at_end(self.after_actions)
         return dfa
