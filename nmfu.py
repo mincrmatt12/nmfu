@@ -5997,6 +5997,7 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
                 if (frozenset(transition.on_values), transition.target) in ignored_transitions:
                     continue
             is_real = True
+            overriden_target = str(id(transition.target))
 
             for action in transition.actions:
                 acname = ProgramData.lookup(action, DTAG.NAME, recurse_upwards=False)
@@ -6010,10 +6011,15 @@ def debug_dump_dfa(dfa: DFA, out_name="dfa", highlight=None): # pragma: no cover
                         if (frozenset([id(action)]), tgt) not in ignored_transitions:
                             g.edge(str(id(state)), str(id(tgt)), label=f"{acname} side effect")
                 if action.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.ALWAYS_GOTO_UNDEFINED]:
-                    is_real = False
+                    if action.get_target_override_mode() == ActionOverrideMode.ALWAYS_GOTO_UNDEFINED:
+                        # add fake invisible node
+                        g.node("_asn" + str(id(action)), style="invis")
+                        overriden_target = "_asn" + str(id(action))
+                    else:
+                        is_real = False
                     break
             if is_real:
-                g.edge(str(id(state)), str(id(transition.target)), label=label, style="dashed" if transition.is_fallthrough else "solid", color = "orange" if transition.error_handling else "black")
+                g.edge(str(id(state)), overriden_target, label=label, style="dashed" if transition.is_fallthrough else "solid", color = "orange" if transition.error_handling else "black")
 
     for v in ignored_transitions:
         values, target = v
