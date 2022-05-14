@@ -5,7 +5,7 @@ script:
   # Build wheel
   - python3 setup.py bdist_wheel
   # Install application dependencies
-  - python3 -m pip install --ignore-installed --prefix=/usr --system --root=$PWD/AppDir dist/nmfu-0.5.0a2-py3-none-any.whl
+  - python3 -m pip install --ignore-installed --prefix=/usr --system --root=$PWD/AppDir dist/nmfu-0.5.0a3-py3-none-any.whl
 
 AppDir:
     path: ./AppDir
@@ -14,7 +14,7 @@ AppDir:
         id: xyz.mm12.nmfu
         name: nmfu
         icon: utilities-terminal
-        version: 0.5.0a2
+        version: 0.5.0a3
         exec: usr/bin/python3 
         exec_args: "$APPDIR/usr/bin/nmfu $@"
 
