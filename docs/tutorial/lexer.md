@@ -26,7 +26,7 @@ To start, we'll use a loop and a case statement to match the various tokens:
 parser {
 	loop {
 		case {
-			/\w+/ -> {} // ignore white space
+			/\s+/ -> {} // ignore white space
 			"(" -> {} // left paren
 			")" -> {} // right paren
 			/[a-zA-Z_]\w*/ -> {} // symbol (not starting with a number)
@@ -52,7 +52,7 @@ yieldcode LP, RP, SYMBOL, INTEGER;
 parser {
 	loop {
 		case {
-			/\w+/ -> {} // ignore white space
+			/\s+/ -> {} // ignore white space
 			"(" -> {yield LP;} // left paren
 			")" -> {yield RP;} // right paren
 			/[a-zA-Z_]\w*/ -> {yield SYMBOL;} // symbol (not starting with a number)
@@ -239,7 +239,7 @@ yieldcode _RESET; // ignored, only used to mark ignored chars
 parser {
 	loop {
 		case {
-			/\w+/ -> {yield _RESET;} // ignore white space
+			/\s+/ -> {yield _RESET;} // ignore white space
 			// ... rest of parser ...
 ```
 
@@ -265,7 +265,7 @@ If we try to naively adjust the case statement, say to something like
 parser {
 	loop {
 		case {
-			/\w+/ -> {} // ignore white space
+			/\s+/ -> {} // ignore white space
 			"(" -> {yield LP;} // left paren
 			")" -> {yield RP;} // right paren
 			/\w*[a-zA-Z_]\w*/ -> {yield SYMBOL;} // symbol (containing at least one non-numeric character)
@@ -297,7 +297,7 @@ We indicate this by making the case greedy:
 
 ```nmfu
 greedy case {
-	/\w+/ -> {} // ignore white space
+	/\s+/ -> {} // ignore white space
 	"(" -> {yield LP;} // left paren
 	")" -> {yield RP;} // right paren
 	/\w*[a-zA-Z_]\w*/ -> {yield SYMBOL;} // symbol (containing at least one non-numeric character)
@@ -323,7 +323,7 @@ yieldcode LP, RP, SYMBOL, INTEGER, DEFINE;
 // ...
 
 greedy case {
-	/\w+/ -> {} // ignore white space
+	/\s+/ -> {} // ignore white space
 	"(" -> {yield LP;} // left paren
 	")" -> {yield RP;} // right paren
 	/\w*[a-zA-Z_]\w*/ -> {yield SYMBOL;} // symbol (containing at least one non-numeric character)
@@ -352,7 +352,7 @@ us to the ambiguity. Luckily, greedy case statements let us solve this too, with
 
 ```nmfu
 greedy case {
-	/\w+/ -> {} // ignore white space
+	/\s+/ -> {} // ignore white space
 	"(" -> {yield LP;} // left paren
 	")" -> {yield RP;} // right paren
 	/\w*[a-zA-Z_]\w*/ -> {yield SYMBOL;} // symbol (containing at least one non-numeric character)
