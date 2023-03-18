@@ -36,7 +36,7 @@ pipeline {
 			steps {
 				sh "pytest --junit-xml=junit.xml --cov=nmfu --cov-report=xml || true"
 				junit 'junit.xml'
-				publishCoverage adapters: [coberturaAdapter('coverage.xml')], sourceFileResolver: sourceFiles('STORE_LAST_BUILD')
+				recordCoverage sourceCodeRetention: 'EVERY_BUILD', tools: [[parser: 'COBERTURA', pattern: 'coverage.xml']]
 			}
 		}
 		stage('Deploy/Package') {
