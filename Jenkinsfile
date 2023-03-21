@@ -34,7 +34,7 @@ pipeline {
 				PYTHONPATH="."
 			}
 			steps {
-				sh "pytest --junit-xml=junit.xml --cov=nmfu --cov-report=xml || true"
+				sh "pytest --junit-xml=junit.xml --cov-branch --cov=nmfu --cov-report=xml || true"
 				junit 'junit.xml'
 				recordCoverage sourceCodeRetention: 'EVERY_BUILD', tools: [[parser: 'COBERTURA', pattern: 'coverage.xml']]
 			}
