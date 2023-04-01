@@ -5440,11 +5440,12 @@ class CodegenCtx:
             # We treat the size given in by the user as including a terminating null (if requested, anyways)
             max_length_expr = self._generate_buflike_length_expr(action.into_storage, include_null=True)
             result.add(f"if (state->{action.into_storage.name}_counter == {max_length_expr}) {{")
-            ProgramData.imbue(action, DTAG.ACTION_MAY_SKIP, True) # TODO: this should probably be a fallthrough, but there's no way to communicate that.
             with result as body:
                 body.add(f"state->state = {self.dfa.states.index(action.end_target)};")
                 if transition is not None:
-                    body.add(f"goto {self._transition_skip_action_label(transition)};")
+                    body.add(f"goto repeatswitch;") # Fallthrough via switch
+                else:
+                    body.add(f"return {self.program_name.upper()}_OK;") # end processing instructions
             result.add("}")
             result.add("else {")
             with result as body:
@@ -5489,14 +5490,16 @@ class CodegenCtx:
 
                 result.add("}")
         elif isinstance(action, BreakAction):
-            if transition is None:
-                raise IllegalDFAStateError("Break action placed on action outside of transition", action)
+            # And add the finish actions to everything that pointed at it
             # Generate all subactions
             result.add("// break subactions")
             for subaction in action.replacement_actions():
                 result += self._generate_action_implementation(subaction, is_start=is_start, is_end=is_end, transition=transition)
             result.add(f"state->state = {self.dfa.states.index(action.refers_to.end_state)};")
-            result.add(f"goto {self._transition_skip_action_label(transition)};")
+            if transition is not None:
+                result.add(f"goto {self._transition_skip_action_label(transition)};")
+            else:
+                result.add(f"return {self.program_name.upper()}_OK;")
             ProgramData.imbue(action, DTAG.ACTION_MAY_SKIP, True)
         else:
             raise NotImplementedError(action)
