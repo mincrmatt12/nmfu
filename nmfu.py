@@ -3915,11 +3915,11 @@ class TryExceptNode(ActionSinkNode, ActionSourceNode):
             handler_dfa = self.handler.convert(current_error_handlers)
             sub_dfa.append_after(handler_dfa, sub_states=[self.handler_node], chain_actions=self.incoming_handler_actions)
         else:
-            # Otherwise, just mark the handler as a finish state
-            sub_dfa.mark_accepting(self.handler_node)
+            # Otherwise, create a fallthrough dummy transition to hook up the handler actions.
+            dummy_end_node = DFState()
             # And add the finish actions to everything that pointed at it
-            for trans in sub_dfa.transitions_pointing_to(self.handler_node):
-                trans.attach(*self.incoming_handler_actions)
+            self.handler_node.transition(DFTransition([DFTransition.Else], fallthrough=True).to(dummy_end_node).attach(*self.incoming_handler_actions))
+            sub_dfa.mark_accepting(dummy_end_node)
 
         # If there is a next node, append it
         if self.next is not None:
