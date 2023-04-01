@@ -4968,26 +4968,28 @@ class DfaCompileCtx:
                 if not transition.is_fallthrough:
                     continue
 
-                # TODO: this should really be extracted into a method
                 visited = set()
+                def consider(transition):
+                    return not any(x.get_target_override_mode() in [ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.ALWAYS_GOTO_UNDEFINED] and transition.target not in x.get_target_override_targets() for x in transition.actions)
+
                 def aux(x):
                     if isinstance(x, DFConditionPoint):
                         for i in x.transitions:
                             if i.target in visited:
                                 continue
-                            visited.add(i.target)
-                            aux(i.target)
+                            if consider(i):
+                                visited.add(i.target)
+                                aux(i.target)
                     else:
                         real_target = x[transition.on_values]
-                        if real_target and real_target.is_fallthrough:
+                        if real_target and real_target.is_fallthrough and consider(real_target):
                             if real_target.target not in visited:
                                 visited.add(real_target.target)
                                 aux(real_target.target)
                 
                 aux(state)
 
-                if state in visited and transition.is_fallthrough and not any(x.get_target_override_mode() in [
-                    ActionOverrideMode.ALWAYS_GOTO_OTHER, ActionOverrideMode.ALWAYS_GOTO_UNDEFINED] and state not in x.get_target_override_targets() for x in transition.actions):
+                if state in visited:
                     raise IllegalDFAStateError("Infinite loop due to self-referential fallthrough", transition)
         
 
