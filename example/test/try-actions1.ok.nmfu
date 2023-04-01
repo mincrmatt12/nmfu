@@ -1,0 +1,13 @@
+out str[32] test;
+
+parser {
+    loop {
+        try {
+            test += /abc+d/;
+        }
+        catch (outofspace) {
+            delete test;
+            finish;
+        }
+    }
+}

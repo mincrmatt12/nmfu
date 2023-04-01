@@ -1,0 +1,22 @@
+// finish-A: b
+// finish-A: cd
+// finish-B: a
+// bad: c
+
+finishcode A, B;
+
+parser {
+    case {
+        "a" -> {
+            finish B;
+        }
+        "b" -> {
+            
+        }
+        "c" -> {
+            "d";
+        }
+    }
+    finish A;
+    // tests actions being added to case blocks
+}

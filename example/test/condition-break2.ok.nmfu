@@ -1,0 +1,13 @@
+out int test;
+
+parser {
+    loop {
+        // creates conditionalaction that marks next as ok for should_try_to_append
+        if test == 'f' {
+            break;
+        }
+        "test";
+        test = [test + 1];
+    }
+    "shouldbereachable";
+}

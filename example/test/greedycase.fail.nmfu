@@ -1,0 +1,13 @@
+parser {
+    greedy case {
+        "help", /hr+.lp/ -> {
+            " you";
+        }
+        /he+lp/ -> {
+            " no"; // should collide on case help
+        }
+        else -> {
+            wait "\r\n";
+        }
+    }
+}

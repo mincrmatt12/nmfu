@@ -1,0 +1,10 @@
+out int test;
+
+parser {
+    foreach {
+        test = 4;
+    }
+    do {
+        test = 5;
+    }
+}
