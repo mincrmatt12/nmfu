@@ -21,4 +21,4 @@ as a pygments lexer plugin at [mincrmatt12/nmfu-pygments](https://github.com/min
 ## License
 
 NMFU is licensed under the GPLv3.
-Copyright (C) 2020-2021 Matthew Mirvish.
+Copyright (C) 2020-2023 Matthew Mirvish.
