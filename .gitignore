@@ -22,3 +22,5 @@ appimage-builder-cache/
 .coverage*
 htmlcov/
 coverage.xml
+
+appimage-build/
