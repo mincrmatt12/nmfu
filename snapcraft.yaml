@@ -10,7 +10,6 @@ base: core20
 parts:
     nmfu:
         plugin: python
-        python-version: python3
         source: .
 
 apps:
