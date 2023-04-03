@@ -3919,6 +3919,7 @@ class TryExceptNode(ActionSinkNode, ActionSourceNode):
             dummy_end_node = DFState()
             # And add the finish actions to everything that pointed at it
             self.handler_node.transition(DFTransition([DFTransition.Else], fallthrough=True).to(dummy_end_node).attach(*self.incoming_handler_actions))
+            sub_dfa.add(dummy_end_node)
             sub_dfa.mark_accepting(dummy_end_node)
 
         # If there is a next node, append it
