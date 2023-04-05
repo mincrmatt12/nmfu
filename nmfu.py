@@ -5365,14 +5365,14 @@ class CodegenCtx:
             bytes_value = value
         for i in bytes_value:
             if chr(i) in ["\\", '"']:
-                result += "\\" + i
+                result += "\\" + chr(i)
             elif not (32 <= i < 127):
                 result += "\\x{:02x}".format(i)
             else:
                 result += chr(i)
         return result
 
-    def _generate_set_string(self, value: Union[str], into: OutputStorage):
+    def _generate_set_string(self, value: Union[bytes, str], into: OutputStorage):
         """
         Generate code that sets value into into
 
@@ -5381,7 +5381,10 @@ class CodegenCtx:
         Must ensure value is short enough first.
         """
 
-        escaped_length = len(value.encode('utf-8'))
+        if isinstance(value, str):
+            escaped_length = len(value.encode('utf-8'))
+        else:
+            escaped_length = len(value)
 
         return f"memcpy(state->c.{into.name}, \"{self._escape_string(value)}\", {escaped_length if not into.str_null else escaped_length+1});"
 
