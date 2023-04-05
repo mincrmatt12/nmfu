@@ -4255,6 +4255,7 @@ class ParseCtx:
             if name in defined:
                 raise DuplicateDefinitionError("macro argument", i, name)
             parsed_args.append(MacroArgument(name, kind))
+            defined.add(name)
         return parsed_args
 
     def _convert_char_const(self, char_const: str):
