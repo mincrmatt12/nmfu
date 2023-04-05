@@ -1,0 +1,6 @@
+out int test;
+out str[32] test;
+
+parser {
+    "hi";
+}

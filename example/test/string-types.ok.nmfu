@@ -2,6 +2,7 @@
 
 out unterminated str[32] unterm = "test";
 out str[32] term;
+out unterminated str[32] inited = "11 22 33"b;
 
 parser {
     unterm += /(\d\w)|!\d\d/;

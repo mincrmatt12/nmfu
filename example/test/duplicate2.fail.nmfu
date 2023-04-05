@@ -1,0 +1,9 @@
+macro test() {
+}
+
+macro test() {
+}
+
+parser {
+    "hi";
+}

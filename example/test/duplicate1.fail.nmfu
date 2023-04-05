@@ -1,0 +1,6 @@
+out enum{TEST, ABC} dup;
+out enum{TEST, ABC} duP;
+
+parser {
+    "hi";
+}

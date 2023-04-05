@@ -4,7 +4,7 @@ parser {
     foreach {
         /\d+/;
     } do {
-        number = [number * 10 + ($last - 48)];
+        number = [-(-number) * 10 + ($last - 48)];
     }
     wait "\r\n";
 }

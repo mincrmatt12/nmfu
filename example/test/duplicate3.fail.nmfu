@@ -1,0 +1,6 @@
+macro test(match a, match a) {
+}
+
+parser {
+    "hi";
+}
