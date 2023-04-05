@@ -841,14 +841,10 @@ class DFA:
                 fake_start = DFState()
                 chained_dfa.add(fake_start)
 
-                # Tie them separately; note this will cause things to go wrong in certain cases
-                # with conditionals; but we generally don't deal with those
-                if valid:
-                    fake_start[valid] = chained_dfa.starting_state
-                    fake_start[valid].fallthrough(True)
-                if to_else:
-                    fake_start[to_else] = chained_dfa.starting_state
-                    fake_start[to_else].fallthrough(True).handles_else()
+                fake_start[valid] = chained_dfa.starting_state
+                fake_start[valid].fallthrough(True)
+                fake_start[to_else] = chained_dfa.starting_state
+                fake_start[to_else].fallthrough(True).handles_else()
                 chained_dfa.starting_state = fake_start
 
         # Check for ambiguity: if any transitions added to a sub_state try to redirect a valid character a different valid
