@@ -18,7 +18,7 @@ setup(
         entry_points={
             "console_scripts": ["nmfu=nmfu:main"]
         },
-        install_requires=["lark~=1.0.0"],
+        install_requires=["lark>=1.0"],
         author="Matthew Mirvish",
         author_email="matthew@mm12.xyz",
 
