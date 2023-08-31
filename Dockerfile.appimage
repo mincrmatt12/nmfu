@@ -2,4 +2,4 @@ FROM appimagecrafters/appimage-builder:1.1.0
 
 ENV XDG_DATA_DIRS "/usr/share:/usr/local/share"
 
-RUN apt-get update && apt-get install -y --no-install-recommends adwaita-icon-theme && rm -rf /var/lib/apt/lists/* 
+RUN apt-get update && apt-get install -y --no-install-recommends adwaita-icon-theme squashfs-tools && rm -rf /var/lib/apt/lists/* 
