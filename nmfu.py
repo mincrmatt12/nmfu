@@ -1015,6 +1015,7 @@ class ProgramFlag(int, enum.Enum):
     # - Template options
     USE_PRAGMA_ONCE = (10, "Use #pragma once instead of an #ifndef guard in the header")
     USE_CPLUSPLUS_GUARD = (14, "Include a __cplusplus extern C guard", True)
+    USE_PACKED_ENUMS = (32, "Define all enumerations with __attribute__((packed))", False)
 
     # Debug options
     DEBUG_DFA_HIDE_ERROR_HANDLING = (100, "", True)
@@ -5066,7 +5067,10 @@ class CodegenCtx:
         result += self._generate_state_object_decl()
 
         result.add()
-        result.add(f"enum {self.program_name}_result {{")
+        if ProgramData.do(ProgramFlag.USE_PACKED_ENUMS):
+            result.add(f"enum __attribute__((packed)) {self.program_name}_result {{")
+        else:
+            result.add(f"enum {self.program_name}_result {{")
         with result as enum_content:
             enum_content.add(f"{self.program_name.upper()}_OK,")
             enum_content.add(f"{self.program_name.upper()}_FAIL,")
@@ -5255,7 +5259,10 @@ class CodegenCtx:
 
         result = Outputter()
         result.add("// enum for output {}".format(out_decl.name))
-        result.add(f"enum {self.program_name}_out_{out_decl.name} {{")
+        if ProgramData.do(ProgramFlag.USE_PACKED_ENUMS):
+            result.add(f"enum __attribute__((packed)) {self.program_name}_out_{out_decl.name} {{")
+        else:
+            result.add(f"enum {self.program_name}_out_{out_decl.name} {{")
         
         with result as contents:
             for val in out_decl.enum_values:

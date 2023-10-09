@@ -18,7 +18,7 @@ example_flag_combos = [
     ("-O0",),
     ("-O2", "-finclude-user-ptr"),
     ("-O2", "-fallocate-str-space-dynamic-on-demand"),
-    ("-O2", "-fallocate-str-space-dynamic-on-demand", "-fhook-per-state"),
+    ("-O2", "-fallocate-str-space-dynamic-on-demand", "-fhook-per-state", "-fuse-packed-enums"),
     ("-O2", "--collapsed-range-length", "6", "-fno-use-cplusplus-guard"),
     ("-O2", "-fallocate-str-space-dynamic-on-demand", "-fstrings-as-u8", "-fdelete-string-free-memory", "-findirect-start-ptr", "-fstrict-done-token-generation")
 ]
