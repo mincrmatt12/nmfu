@@ -66,7 +66,7 @@ pipeline {
 					}
 					steps {
 						unstash name: 'built'
-						sh "twine upload -u $DPYPI_INFO_USR -p $DPYPI_INFO_PSW -r $PYPI_REPOSITORY_NAME --non-interactive dist/*"
+						sh 'twine upload -u $DPYPI_INFO_USR -p $DPYPI_INFO_PSW -r $PYPI_REPOSITORY_NAME --non-interactive dist/*'
 					}
 				}
 				stage('Generate AppImage') {
