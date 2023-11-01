@@ -820,7 +820,7 @@ class DFA:
 
     def append_after(self, chained_dfa: "DFA", sub_states=None, mark_accept=True, chain_actions=None):
         """
-        Add the chained_dfa in such a way that its start state "becomes" all of the `sub_states` (or if unspecified, the accept states of _this_ dfa)
+        Add the chained_dfa in such a way that its start state "becomes" all of the `sub_states` (or if unspecified, the accept states of _this_ dfa).
 
         If mark_accept is True, we should replace the accept states that we currently have with corresponding ones based on the chained dfa.
         If chain_actions is not empty, we add those actions to all new transitions. This does _not_ create potential ambiguity, as the original start
@@ -846,6 +846,13 @@ class DFA:
                 fake_start[to_else] = chained_dfa.starting_state
                 fake_start[to_else].fallthrough(True).handles_else()
                 chained_dfa.starting_state = fake_start
+
+        # If the caller wants to chain actions into a DFA which potentially matches the empty string, we have to place the actions onto 
+        # transitions going into the sub_states, instead of on transitions coming out of them that we generate. This adds more opportunities
+        # for "unable to schedule strict"-type errors, but avoids missing actions in these cases.
+        if chain_actions and chained_dfa.starting_state in chained_dfa.accepting_states:
+            self.chain_actions_into(chain_actions, sub_states)
+            chain_actions = [] # Since the actions are already handled, don't try to add them to new transitions.
 
         # Check for ambiguity: if any transitions added to a sub_state try to redirect a valid character a different valid
         # state, there is ambiguity. In other words, we only want to add transitions that would previously lead to the error state.
@@ -932,12 +939,16 @@ class DFA:
             for state in chained_dfa.accepting_states:
                 self.mark_accepting(state)
 
-    def chain_actions_at_end(self, actions: Iterable["Action"]):
+    def chain_actions_into(self, actions: Iterable["Action"], target_states: Iterable[DFState]):
         """
-        Attempt to chain the given actions on all transitions pointing into accept states. If these actions cannot be scheduled once (if requested) an error will be thrown
+        Attempt to chain the given actions on all transitions pointing into the passed states.
+
+        If these actions cannot be scheduled once (if requested) an error will be thrown. Note the check for scheduling once
+        is very weak; no dominance checking is performed -- if any non-error-handling transitions exist on a targeted state 
+        the state is assumed to be reentrant.
         """
 
-        for finish in self.accepting_states:
+        for finish in target_states:
             for incoming, trans in self.transitions_pointing_to(finish, include_states=True):
                 for action in actions:
                     if action.is_timing_strict() and any(not x.error_handling for x in finish.transitions):
@@ -945,6 +956,9 @@ class DFA:
                         raise UnableToScheduleActionError([incoming], [action])
                     else:
                         trans.attach(action)
+
+    def chain_actions_at_end(self, actions: Iterable["Action"]):
+        self.chain_actions_into(actions, self.accepting_states)
 
 # =============
 # DEBUG STORAGE
