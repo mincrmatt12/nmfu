@@ -137,8 +137,8 @@ def test_ok(filename):
 
     for targetcode, case in testcases:
         res = final_dfa.simulate(case)
-        assert isinstance(res, nmfu.CustomFinishAction)
-        assert res.result_code == targetcode
+        assert isinstance(res, nmfu.CustomFinishAction), case
+        assert res.result_code == targetcode, case
 
     testcases = []
 
