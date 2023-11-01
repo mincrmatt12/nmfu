@@ -1,0 +1,17 @@
+// finish-A: b
+// finish-A: a
+// bad: c
+
+finishcode A;
+
+// Test that actions are properly respected for potentially-empty case blocks.
+
+parser {
+    case {
+        "a" -> {finish A;}
+        "b" -> {
+            finish A;
+            optional { "c"; }
+        }
+    }
+}
