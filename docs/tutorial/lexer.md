@@ -68,7 +68,7 @@ However, in order for this to compile, we must explicitly enable yield support w
 $ nmfu -fyield-support lexer.nmfu
 ```
 
-This also enables the [indirect start pointer](/user-ref/cli#indirect-start-pointer) mode, which changes the signature of the `_feed` function to
+This also enables the [indirect start pointer](../user-ref/cli.md#indirect-start-pointer) mode, which changes the signature of the `_feed` function to
 
 ```c
 lexer_result_t lexer_feed(lexer_state_t * state, const uint8_t **start, const uint8_t * end);

@@ -1,6 +1,6 @@
 # HTTP Continued: Headers with Loops
 
-The parser created in the [last tutorial](./http1), while functional, is lacking a fairly important component: parsing request headers.
+The parser created in the [last tutorial](./http1.md), while functional, is lacking a fairly important component: parsing request headers.
 
 Currently, our parser looks something like 
 
@@ -74,7 +74,7 @@ parser {
 ```
 
 The `expr` here means an _integer-expression_, (as opposed to a _match-expression_), effectively anything that can be
-stored into a scalar variable (for more information, see the [section on expressions in the reference](../user-ref/parser#expressions)).
+stored into a scalar variable (for more information, see the [section on expressions in the reference](../user-ref/parser.md#expressions)).
 
 Now we can succinctly set an error code and ignore the rest of a request with just one line:
 

@@ -11,5 +11,5 @@ _the "no memory for you" "parser" generator_
 
 `nmfu` is a "protocol parser generator" -- it converts a DSL representing some protocol handler into an efficient interruptable C routine (based on a state machine) that parses it.
 
-- Confused? Try reading the [tutorial](./tutorial/http1).
-- Want to find specific information about nmfu? Check out the [reference](./user-ref/parser).
+- Confused? Try reading the [tutorial](./tutorial/http1.md).
+- Want to find specific information about nmfu? Check out the [reference](./user-ref/parser.md).
