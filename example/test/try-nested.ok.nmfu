@@ -1,0 +1,35 @@
+// finish-C: abh
+// finish-B: ba aag
+// finish-B: cgggg
+// finish-A: acdefh
+// finish-A: acfh
+// bad: ac  k
+
+finishcode A, B, C;
+
+parser {
+    try {
+        try {
+            try {
+                "a";
+            }
+            catch (outofspace) 
+            {
+                finish A;
+            }
+        }
+        catch (nomatch) {
+            wait "g";
+            finish B;
+        }
+
+        "b";
+    }
+    catch (nomatch) {
+        /[a-gi-z]+h/;
+        finish A;
+    }
+
+    "h";
+    finish C;
+}
