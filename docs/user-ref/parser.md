@@ -292,6 +292,16 @@ into = [into | (($last & 127) << (7 * varint_counter))];
 
 Additionally, the name of a macro argument of type `expr` can replace any _integer-expression_. Priority versus _output-variable_ names is undefined.
 
+!!! warning
+    The precise semantics of "last matched" character for the purposes of `$last` are somewhat vague. It is only guaranteed to be well-defined in the following
+    situations:
+ 
+    - Immediately after **(and in the same block)** as a _match-statement_, in which case it is the last-matched character of the _match-expression_.
+    - Inside a _case-statement_ clause which itself **cannot match characters**, in which case it is the last-matched character of the predicate expression.
+    - During a _foreach-statement_, where it takes on precisely the values matched by the contents of the first block.
+
+    In other places it may bind to the first character of the next match expression depending on the surrounding context.
+
 ## Block Statements
 
 Block statements are statements which contain a block of other statements:
