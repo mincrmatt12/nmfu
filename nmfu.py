@@ -549,6 +549,33 @@ class DFProxyState(DFState):
 
         return True
 
+    def non_proxy_frontiers(self):
+        """
+        Return the set of states reachable from following only proxy states, starting at this state.
+        """
+
+        visited = set()
+        sources = set()
+
+        def aux(state):
+            if state in visited:
+                return
+            visited.add(state)
+            if isinstance(state, DFProxyState):
+                for t in state.all_transitions():
+                    aux(t.target)
+                    # Also consider actions with overrides
+                    for action in t.actions:
+                        if action.get_target_override_mode() in (ActionOverrideMode.MAY_GOTO_TARGET, ActionOverrideMode.ALWAYS_GOTO_OTHER):
+                            for extra in action.get_target_override_targets():
+                                aux(extra)
+            else:
+                sources.add(state)
+
+        aux(self)
+        
+        return sources
+
     def equivalent_on_values(self):
         r"""
         Compute an "equivalent" set of on_values, such that taking any one will have at least one valid path through all directly-attached condition points, in addition
@@ -569,30 +596,13 @@ class DFProxyState(DFState):
         encountered = set()
         candidate_else = set()
 
-        visited = set()
-        sources = set()
-
-        def aux(state):
-            if state in visited:
-                return
-            visited.add(state)
-            if isinstance(state, DFProxyState):
-                for t in state.all_transitions():
-                    aux(t.target)
-                    # Also consider actions with overrides
-                    for action in t.actions:
-                        if action.get_target_override_mode() in (ActionOverrideMode.MAY_GOTO_TARGET, ActionOverrideMode.ALWAYS_GOTO_OTHER):
-                            for extra in action.get_target_override_targets():
-                                aux(extra)
-            else:
-                sources.add(state)
-                for t in state.all_transitions():
-                    if t.error_handling:
-                        candidate_else.update(t.on_values)
-                    else:
-                        encountered.update(t.on_values)
-
-        aux(self)
+        sources = self.non_proxy_frontiers()
+        for state in sources:
+            for t in state.all_transitions():
+                if t.error_handling:
+                    candidate_else.update(t.on_values)
+                else:
+                    encountered.update(t.on_values)
 
         filtered = set()
         for possible in candidate_else:
