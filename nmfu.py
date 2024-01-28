@@ -1551,7 +1551,7 @@ class NMFUError(Exception):
                     if column is not None:
                         info_str += "\n" + NMFUError._generate_whitespace_marker(line, column)
                 else:
-                    info_str = info_str[-1]
+                    info_str = info_str[:-1]
             else:
                 if line is not None:
                     info_str += f"- line {line}:\n{ProgramData.get_source_line(line)}"
