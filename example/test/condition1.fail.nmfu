@@ -1,9 +1,9 @@
 out int sum = 0;
 
 parser {
-    /["e]+/;
+    /["ef]+/;
     if sum > 0 {
-        /[^"]+"/;
+        /(hi)?[^"hi]+"/;
     }
     else {
         "earl";

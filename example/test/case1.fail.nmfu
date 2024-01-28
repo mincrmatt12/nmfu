@@ -3,7 +3,7 @@ parser {
         "help", /hr+.lp/ -> {
             " you";
         }
-        /he+lp/ -> {
+        /he+(lp|tr)/ -> {
             " no"; // should collide on case help
         }
         else -> {
