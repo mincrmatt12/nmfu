@@ -2805,15 +2805,21 @@ class RegexSequence:
 class RegexNFState:
     Epsilon = object()
 
+    class TransitionMeta:
+        pass
+
     def __init__(self):
         self.transitions = {}
         self.epsilon_moves = set() 
+        self.transition_dbg_metas = {}
 
     def transition(self, symbol, target):
         if symbol == RegexNFState.Epsilon:
             self.epsilon_moves.add(target)
         else:
             self.transitions[symbol] = target
+        if symbol not in self.transition_dbg_metas:
+            self.transition_dbg_metas[symbol] = ProgramData.imbue(RegexNFState.TransitionMeta(), DTAG.PARENT, self)
         return self
 
     def epsilon_closure(self, visited=None):
@@ -2859,10 +2865,13 @@ class RegexNFA:
 
         def moves(states, on):
             results = set() 
+            upstream_meta = None
             for i in states:
                 if on in self.states[i].transitions:
                     results.add(get_index(self.states[i].transitions[on]))
-            return results
+                    if upstream_meta is None:
+                        upstream_meta = self.states[i].transition_dbg_metas[on]
+            return results, upstream_meta
 
         def epsilon_closure(states):
             total = set()
@@ -2885,7 +2894,7 @@ class RegexNFA:
             # find all potential edges
             for potential_move in alphabet:
                 # is there anything here
-                move_result = moves(processing, potential_move)
+                move_result, move_meta = moves(processing, potential_move)
                 if move_result:
                     # the new state is the e-closure
                     new_state = epsilon_closure(move_result)
@@ -2898,6 +2907,7 @@ class RegexNFA:
                             target_dfa.mark_finishing(visited_states[new_state])
                         to_process.put(new_state)
                     visited_states[processing].transition(potential_move, visited_states[new_state])
+                    ProgramData.imbue(visited_states[processing].transition_dbg_metas[potential_move], DTAG.PARENT, move_meta)
 
         # add all the states
         for i in visited_states.values():
@@ -2981,6 +2991,7 @@ class RegexNFA:
                 if target_subset not in new_states:
                     add_back(target_subset)
                 new_state.transition(character, new_states[target_subset])
+                ProgramData.imbue(new_state.transition_dbg_metas[character], DTAG.PARENT, state.transition_dbg_metas[character])
 
             return new_state
 
@@ -3278,6 +3289,8 @@ class RegexMatch(Match):
         self.out_dfa_cache[id(nfdfa_state)] = new_state
         into.add(new_state)
 
+        new_transition_upstreams = {}
+
         if nfdfa_state in self.dfa_2.finishing_states:
             into.mark_accepting(new_state)
 
@@ -3287,8 +3300,11 @@ class RegexMatch(Match):
                 # Convert to a normal set
                 new_transitions[source.chars | frozenset((DFTransition.End,))] = (else_path, False)
                 new_transitions[frozenset((DFTransition.Else,))] = (self._create_dfa_state(target, into, False, else_path), target in self.dfa_2.finishing_states)
+                new_transition_upstreams[DFTransition.Else] = nfdfa_state.transition_dbg_metas[source]
             else:
                 new_transitions[source.chars] = (self._create_dfa_state(target, into, False, else_path), target in self.dfa_2.finishing_states)
+                for i in source.chars:
+                    new_transition_upstreams[i] = nfdfa_state.transition_dbg_metas[source]
 
         # Simplify
         new_transitions_inverse = defaultdict(list) 
@@ -3328,10 +3344,12 @@ class RegexMatch(Match):
                         if x in conflict.on_values:
                             conflict.on_values.remove(x)
 
-            new_state.transition(DFTransition(list(source)).to(target).attach(*actions).fallthrough(target == else_path).handles_else(target == else_path))
+            new_transition = DFTransition(list(source)).to(target).attach(*actions).fallthrough(target == else_path).handles_else(target == else_path)
+            if new_transition.on_values[0] in new_transition_upstreams:
+                ProgramData.imbue(new_transition, DTAG.PARENT, new_transition_upstreams[new_transition.on_values[0]])
+            new_state.transition(new_transition)
 
         return new_state
-
 
     def convert(self, current_error_handlers: dict):
         # First convert to an NFA
