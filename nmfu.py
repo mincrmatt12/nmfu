@@ -917,17 +917,15 @@ class DFA:
                 target = sub_state[relevant_values]
                 if target is None:
                     targets = set()
-                    target_map = {}
                     for value in relevant_values:
                         v = sub_state[value]
                         if v is None:
                             continue
                         targets.add(v)
-                        if v not in target_map: target_map[v] = set()
-                        target_map[v].add(value)
                 else:
                     targets = {target} 
-                    target_map = {target: relevant_values}
+
+                # targets is the set of all (potentially) conflicting transitions
 
                 if transition.error_handling:
                     # Cull values
