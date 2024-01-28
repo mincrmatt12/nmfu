@@ -3028,10 +3028,10 @@ class RegexMatch(Match):
         if isinstance(r, RegexCharClass):
             # Simply convert to a boring form
             end_state = RegexNFState()
-            ProgramData.imbue(end_state, DTAG.PARENT, start_state)
             self.nfa.add(end_state)
             start_state.transition(r, end_state)
-            return end_state
+            ProgramData.imbue(start_state.transition_dbg_metas[r], DTAG.PARENT, r)
+            return ProgramData.imbue(end_state, DTAG.PARENT, r)
         elif isinstance(r, RegexAlternation):
             r"""
             Use the union form:
@@ -3043,14 +3043,13 @@ class RegexMatch(Match):
             sub_starts = [RegexNFState() for x in r.sub_matches]
             end_state = RegexNFState()
             self.nfa.add(end_state, *sub_starts)
-            ProgramData.imbue(end_state, DTAG.PARENT, start_state)
             # Link everything up
             for i, j in zip(sub_starts, r.sub_matches):
                 # Link e from start to sub start
                 start_state.transition(RegexNFState.Epsilon, i)
                 # Create sub expr & link to end
                 self._convert_to_nfa(j, i).transition(RegexNFState.Epsilon, end_state)
-            return end_state
+            return ProgramData.imbue(end_state, DTAG.PARENT, r)
         elif isinstance(r, RegexSequence):
             # Chain them all together
             for i in r.sub_matches:
@@ -3061,10 +3060,11 @@ class RegexMatch(Match):
             end_state = RegexNFState()
             sub_start = RegexNFState()
             self.nfa.add(end_state, sub_start)
-            ProgramData.imbue(end_state, DTAG.PARENT, start_state)
             start_state.transition(RegexNFState.Epsilon, end_state).transition(RegexNFState.Epsilon, sub_start)
-            self._convert_to_nfa(r.sub_match, sub_start).transition(RegexNFState.Epsilon, end_state)
-            return end_state
+            sub_end = self._convert_to_nfa(r.sub_match, sub_start)
+            sub_end.transition(RegexNFState.Epsilon, end_state)
+            ProgramData.imbue(sub_end.transition_dbg_metas[RegexNFState.Epsilon], DTAG.PARENT, r)
+            return ProgramData.imbue(end_state, DTAG.PARENT, r)
         elif isinstance(r, RegexKleene):
             r"""
             Use the kleene form:
@@ -3077,10 +3077,11 @@ class RegexMatch(Match):
             end_state = RegexNFState()
             sub_start = RegexNFState()
             self.nfa.add(end_state, sub_start)
-            ProgramData.imbue(end_state, DTAG.PARENT, start_state)
             start_state.transition(RegexNFState.Epsilon, end_state).transition(RegexNFState.Epsilon, sub_start)
-            self._convert_to_nfa(r.sub_match, sub_start).transition(RegexNFState.Epsilon, end_state).transition(RegexNFState.Epsilon, sub_start)
-            return end_state
+            sub_end = self._convert_to_nfa(r.sub_match, sub_start)
+            sub_end.transition(RegexNFState.Epsilon, end_state).transition(RegexNFState.Epsilon, sub_start)
+            ProgramData.imbue(sub_end.transition_dbg_metas[RegexNFState.Epsilon], DTAG.PARENT, r)
+            return ProgramData.imbue(end_state, DTAG.PARENT, r)
         else:
             raise NotImplementedError("unknown")
 
