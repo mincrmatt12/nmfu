@@ -2693,6 +2693,9 @@ class IntegerCondition(DFCondition, HasDefaultDebugInfo):
 class RegexCharClass:
     def __init__(self, chars):
         self.chars = frozenset(chars)
+
+    def clone(self):
+        return RegexCharClass(self.chars)
         
     def isdisjoint(self, other):
         """
@@ -2744,6 +2747,9 @@ class RegexCharClass:
         return InvertedRegexCharClass(self.chars)
 
 class InvertedRegexCharClass(RegexCharClass):
+    def clone(self):
+        return InvertedRegexCharClass(self.chars)
+
     def isdisjoint(self, other):
         if isinstance(other, InvertedRegexCharClass):
             return len(self.chars | other.chars) >= 256 # TODO: add unicode/specific number of symbols support; for all real uses inverted sets are _never_ disjoint
@@ -3089,7 +3095,7 @@ class RegexMatch(Match):
             return RegexSequence(self._interpret_parse_tree(x) for x in regex_tree.children)
         elif tree_data in ("regex_any", "regex_char_class", "regex_set", "regex_inverted_set"):
             return ProgramData.imbue(
-                RegexAlternation(self.character_class_mappings[list(self._visit_all_char_classes(regex_tree))[0]]),
+                RegexAlternation([x.clone() for x in self.character_class_mappings[list(self._visit_all_char_classes(regex_tree))[0]]]),
                 DTAG.SOURCE_LINE, regex_tree.meta.line,
                 DTAG.SOURCE_COLUMN, regex_tree.meta.column
             )
@@ -3101,7 +3107,7 @@ class RegexMatch(Match):
             )
         elif tree_data == "regex_raw_match":
             return ProgramData.imbue(
-                RegexAlternation(self.character_class_mappings[self._convert_raw_regex_unimportant(regex_tree.children[0])]),
+                RegexAlternation([x.clone() for x in self.character_class_mappings[self._convert_raw_regex_unimportant(regex_tree.children[0])]]),
                 DTAG.SOURCE_LINE, regex_tree.meta.line,
                 DTAG.SOURCE_COLUMN, regex_tree.meta.column
             )
