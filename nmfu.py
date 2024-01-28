@@ -3568,24 +3568,32 @@ class CaseNode(Node):
         corresponding_finish_states = {dfa: [] for dfa in ds}
         to_process = queue.Queue()
 
-        def create_real_state_of(state):
+        def create_real_state_of(state, upstream_metas=None):
             new_state = DFState()
             ProgramData.imbue(new_state, DTAG.PARENT, next(iter(state))[1])
 
             corresponds_to_finishes_in = set() 
+            finish_upstream_metas = {}
+            upstream_meta_replacement = {}
+            
+            if upstream_metas is not None:
+                for trans in upstream_metas:
+                    upstream_meta_replacement[trans.target] = trans
+
             is_part_of = set()
             for sub_dfa, sub_state in state:
                 if sub_state in sub_dfa.accepting_states:
                     corresponds_to_finishes_in.add(sub_dfa)
+                    finish_upstream_metas[sub_dfa] = upstream_meta_replacement.get(sub_state, sub_state)
                 is_part_of.add(sub_dfa)
 
             if len(corresponds_to_finishes_in) > 1:
                 if not self.greedy:
-                    raise IllegalDFAStateConflictsError("Ambigious case label: multiple possible finishes", *corresponds_to_finishes_in)
+                    raise IllegalDFAStateConflictsError("Ambigious case label: multiple possible finishes", *finish_upstream_metas.values())
                 target = max(corresponds_to_finishes_in, key=lambda x: priorities[x])
                 if sum(1 for x in corresponds_to_finishes_in if priorities[x] == priorities[target]) > 1:
                     raise IllegalDFAStateConflictsError("Ambigious case label: multiple possible finishes with same priority {}".format(priorities[target]), 
-                            *(x for x in corresponds_to_finishes_in if priorities[x] == priorities[target]))
+                            *(finish_upstream_metas[x] for x in corresponds_to_finishes_in if priorities[x] == priorities[target]))
                 corresponding_finish_states[target].append(new_state)
                 new_dfa.mark_accepting(new_state)
             elif len(corresponds_to_finishes_in) == 1:
@@ -3649,6 +3657,7 @@ class CaseNode(Node):
                 #      in this case, we should add the symbol to the list of symbols that we will assign
                 #      an error transition to
                 found_else_transition = False
+                upstream_metas = []
                 for (sub_dfa, sub_state) in processing:
                     potential_transition = sub_state[symbol]
                     if potential_transition is None:
@@ -3658,6 +3667,7 @@ class CaseNode(Node):
                         continue
                     else:
                         next_state.add((sub_dfa, potential_transition.target))
+                        upstream_metas.append(potential_transition)
 
                 # if case b) is met 
                 if not next_state:
@@ -3668,11 +3678,13 @@ class CaseNode(Node):
 
                 if next_state not in converted_states:
                     to_process.put(next_state)
-                    next_state = create_real_state_of(next_state)
+                    next_state = create_real_state_of(next_state, upstream_metas)
                 else:
                     next_state = converted_states[next_state]
 
-                converted_states[processing][symbol] = next_state
+                converted_states[processing].transition(
+                        ProgramData.imbue(DFTransition(symbol).to(next_state), DTAG.PARENT, upstream_metas[0]), 
+                        allow_replace=True)
 
             # check if we need else (is this a finishing state)
             if converted_states[processing] in new_dfa.accepting_states:
