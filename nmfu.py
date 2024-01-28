@@ -6424,34 +6424,35 @@ def main(): # pragma: no cover
 
     if ProgramData.dump(DebugDumpable.AST): debug_dump_ast(pctx.ast, ProgramData.dump_prefix + ".ast")
 
-    dctx = DfaCompileCtx(pctx)
     try:
-        dctx.compile()
-    except NMFUError as e:
-        if ProgramData.dump(DebugDumpable.TRACEBACK):
-            raise
-        else:
-            print("Compile error:", str(e), file=sys.stderr)
-            exit(5)
+        dctx = DfaCompileCtx(pctx)
+        try:
+            dctx.compile()
+        except NMFUError as e:
+            if ProgramData.dump(DebugDumpable.TRACEBACK):
+                raise
+            else:
+                print("Compile error:", str(e), file=sys.stderr)
+                exit(5)
 
-    if ProgramData.dump(DebugDumpable.DFA): debug_dump_dfa(dctx.dfa, ProgramData.dump_prefix + ".dfa")
-    if ProgramData.dry_run:
+        if ProgramData.dump(DebugDumpable.DFA): debug_dump_dfa(dctx.dfa, ProgramData.dump_prefix + ".dfa")
+        if ProgramData.dry_run:
+            if ProgramData.dump(DebugDumpable.DTREE): debug_dump_datatree(None)
+            print("... dry run, skipping code generation")
+            exit(0)
+
+        cctx = CodegenCtx(dctx, program_name)
+        try:
+            header = cctx.generate_header()
+            source = cctx.generate_source()
+        except NMFUError as e:
+            if ProgramData.dump(DebugDumpable.TRACEBACK):
+                raise
+            else:
+                print("Codegen error:", str(e), file=sys.stderr)
+                exit(5)
+    finally:
         if ProgramData.dump(DebugDumpable.DTREE): debug_dump_datatree(None)
-        print("... dry run, skipping code generation")
-        exit(0)
-
-    cctx = CodegenCtx(dctx, program_name)
-    try:
-        header = cctx.generate_header()
-        source = cctx.generate_source()
-    except NMFUError as e:
-        if ProgramData.dump(DebugDumpable.TRACEBACK):
-            raise
-        else:
-            print("Codegen error:", str(e), file=sys.stderr)
-            exit(5)
-
-    if ProgramData.dump(DebugDumpable.DTREE): debug_dump_datatree(None)
 
     with open(program_name + ".h", "w") as f:
         f.write(header)
