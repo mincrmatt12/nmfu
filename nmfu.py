@@ -4251,10 +4251,10 @@ class ParseCtx:
         for out in self._parse_tree.find_data("out_decl"):
             out_obj = self._parse_out_decl(out)
             if out_obj.name in self.state_object_spec:
-                raise DuplicateDefinitionError("output variable", out_obj, out_obj.name)
+                raise DuplicateDefinitionError("output variable", out, out_obj.name)
             if out_obj.holds_a(OutputStorageType.ENUM):
                 if any(x.upper() == out_obj.name.upper() for x in self.state_object_spec):
-                    raise DuplicateDefinitionError("enum header name", out_obj, out_obj.name.upper())
+                    raise DuplicateDefinitionError("enum header name", out, out_obj.name.upper())
                 if out_obj.name == "finish":
                     raise IllegalParseTree("Enumerations cannot be named 'finish'", out)
             self.state_object_spec[out_obj.name] = out_obj
@@ -4262,7 +4262,7 @@ class ParseCtx:
         for macro in self._parse_tree.find_data("macro_decl"):
             macro_obj = Macro(macro.children[0], macro.children[2:], self._parse_macro_arguments(macro.children[1]))
             if macro_obj.name in self.macros:
-                raise DuplicateDefinitionError("macro", macro_obj, macro_obj.name)
+                raise DuplicateDefinitionError("macro", macro, macro_obj.name)
             self.macros[macro_obj.name] = macro_obj
 
         for hook in self._parse_tree.find_data("hook_decl"):
@@ -4338,7 +4338,7 @@ class ParseCtx:
                     MacroArgumentKind.MACRO: "macro",
                     MacroArgumentKind.OUT: "variable",
                     MacroArgumentKind.LOOP: "break target"
-                }, from_tree)
+                }[context], from_tree)
 
             return storage[name]
 
