@@ -3956,7 +3956,7 @@ class LoopNode(ActionSinkNode, ActionSourceNode):
         parent_dfa.starting_state = sub_dfa.starting_state
 
         if self.next and not should_try_to_append:
-            raise IllegalASTStateError("Unreachable states after loop", self.next)
+            raise IllegalASTStateError("Unreachable states after loop", self, self.next)
 
         return parent_dfa
 
@@ -4855,7 +4855,9 @@ class ParseCtx:
             child_node = self._parse_stmt_seq(statements)
             self.innermost_break_handler = previous_break
             loop_node.set_child(child_node)
-            return loop_node
+            return ProgramData.imbue(loop_node,
+                DTAG.SOURCE_LINE, stmt.meta.line,
+                DTAG.SOURCE_COLUMN, stmt.meta.column)
         elif stmt.data == "try_stmt":
             catch_block = stmt.children[-1]
             # try to see if there are options, otherwise use all
@@ -4898,7 +4900,10 @@ class ParseCtx:
             if action_node is not None:
                 raise IllegalASTStateError("Invalid statement in foreach actions; must only be action source with no DFA", action_node)
 
-            return ForeachNode(content_node, each_actions)
+            return ProgramData.imbue(
+                ForeachNode(content_node, each_actions),
+                DTAG.SOURCE_LINE, stmt.meta.line,
+                DTAG.SOURCE_COLUMN, stmt.meta.column)
         else:
             raise IllegalParseTree("Unknown statement", stmt)
 
