@@ -844,6 +844,27 @@ class DFA:
         if chain_actions is None:
             chain_actions = []
 
+        fake_initial_transition = None
+
+        def resolve_transitions_for_error(transition, symbolset):
+            if transition is not fake_initial_transition:
+                yield transition
+            else:
+                condition_point: DFConditionPoint = transition.target
+                visited = set()
+                for i in condition_point.non_proxy_frontiers():
+                    local_symbolset = symbolset.copy()
+                    if DFTransition.Else in local_symbolset:
+                        local_symbolset.remove(DFTransition.Else)
+                        local_symbolset |= i.compute_foreign_else_definition(condition_point)
+                    for symbol in local_symbolset:
+                        transition = i[symbol]
+                        if transition in visited:
+                            continue
+                        visited.add(transition)
+                        if not transition.error_handling:
+                            yield transition
+
         if isinstance(chained_dfa.starting_state, DFProxyState):
             # Add an extra state that will represent the condition point properly (see docs for equivalent_on_values)
             valid, to_else = chained_dfa.starting_state.equivalent_on_values()
@@ -852,7 +873,7 @@ class DFA:
                 chained_dfa.add(fake_start)
 
                 fake_start[valid] = chained_dfa.starting_state
-                fake_start[valid].fallthrough(True)
+                fake_initial_transition = fake_start[valid].fallthrough(True)
                 fake_start[to_else] = chained_dfa.starting_state
                 fake_start[to_else].fallthrough(True).handles_else()
                 chained_dfa.starting_state = fake_start
@@ -919,8 +940,29 @@ class DFA:
                         debug_dump_dfa(chained_dfa, "ae_dfa1")
                     dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("TT", transition)
                     dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("TA", targets)
+                    targets = [x for x in targets if not x.error_handling and x.target != transition.target]
+                    dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("TAF", targets)
                     dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("RV", relevant_values)
-                    raise IllegalDFAStateConflictsError("Ambiguous transitions detected while joining DFAs", sub_state, transition)
+                    
+                    for target in targets:
+                        relevant_values.intersection_update(target.on_values)
+
+                    dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("RVF", relevant_values)
+                    
+                    # Come up with a reasonable description of which characters are ambiguous
+                    if relevant_values == {DFTransition.Else}: # wildcard notation hard to represent
+                        rv_suffix = ""
+                    else:
+                        relevant_values_in_msg = relevant_values - {DFTransition.Else}
+                        if len(relevant_values_in_msg) >= 3:
+                            relevant_values_in_msg = list(relevant_values_in_msg)[:3]
+                        if ProgramData.do(ProgramFlag.CODEPOINTS_IN_ERRORS):
+                            rv_suffix = f" on symbol{'s' if len(relevant_values_in_msg) > 1 else ''} {', '.join(format(ord(x), '02x') for x in relevant_values_in_msg)}"
+                        else:
+                            rv_suffix = f" on character{'s' if len(relevant_values_in_msg) > 1 else ''} {', '.join(repr(x) for x in (relevant_values_in_msg))}"
+
+                    raise IllegalDFAStateConflictsError("Ambiguous transitions detected while joining DFAs" + rv_suffix, *itertools.chain(
+                        *(resolve_transitions_for_error(x, relevant_values) for x in targets)), *resolve_transitions_for_error(transition, relevant_values))
 
                 # Create transition to add
                 culled_transition.on_values = list(relevant_values)
@@ -1002,6 +1044,9 @@ class ProgramFlag(int, enum.Enum):
     VERBOSE_OPTIMIZE_RESULTS = 201
     VERBOSE_SIMPLIFY_TM = 202
     VERBOSE_AMBIG_ERRORS = 203
+
+    # Error reporting flags
+    CODEPOINTS_IN_ERRORS = (400, "Report codepoints instead of characters in error messages", False, (101,))
 
     # Optimization flags, set in ProgramData
     # DFA optimization options (enabled by various levels of -O)
