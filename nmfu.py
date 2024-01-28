@@ -1092,6 +1092,7 @@ class ProgramFlag(int, enum.Enum):
     DEBUG_DFA_BINARY_LABELS = (101, "Show all transition labels as hex points", False)
     DEBUG_STRICT_PROGRAM_DATA_ERRORS = (102, "Throw an error if the ProgramData tree is updated in an invalid way", False)
     DEBUG_DTREE_HIDE_GC = (103, "Don't show entries in dtree if they've been garbage collected", True)
+    DEBUG_DTREE_AS_GRAPH = (104, "Dump the debug tag tree as a graphviz graph instead of to stdout", False)
 
 class ProgramOption(enum.Enum):
     def __init__(self, default, helpstr):
@@ -1205,6 +1206,9 @@ class ProgramData:
         """
         Find the imbued object's data, or -- if none exists -- find it's parents
         """
+
+        if obj is None:
+            return None
 
         if type(obj) is lark.Token:
             if tag == DTAG.SOURCE_LINE:
@@ -2540,7 +2544,7 @@ class CompareIntegerExpr(MathIntegerExpr):
             return left > right
         elif self.op == CompareIntegerExprOp.LE:
             return left <= right
-        elif self.op == CompareIntegerExprOp.LE:
+        elif self.op == CompareIntegerExprOp.GE:
             return left >= right
         elif self.op == CompareIntegerExprOp.EQ:
             return left == right
@@ -3845,7 +3849,7 @@ class OptionalNode(ActionSinkNode):
     def convert(self, current_error_handlers):
         sub_dfa = self.sub_contents.convert(current_error_handlers)
         if sub_dfa.starting_state in sub_dfa.accepting_states:
-            raise IllegalDFAStateError("Ambigious path in optional: should use optional or go to next", sub_dfa)
+            raise IllegalDFAStateError("Ambigious path in optional: should use optional or go to next", sub_dfa.starting_state)
 
         sub_dfa.mark_accepting(sub_dfa.starting_state)
 
@@ -3942,7 +3946,7 @@ class LoopNode(ActionSinkNode, ActionSourceNode):
         for accept_state in sub_dfa.accepting_states:
             for transition in accept_state.all_transitions():
                 if transition.target in sub_dfa.accepting_states:
-                    raise IllegalDFAStateConflictsError("Ambigious loop: should loop or continue matching", accept_state, transition.target)
+                    raise IllegalDFAStateConflictsError("Ambigious loop: should loop or continue matching", transition)
 
         # If there are error-handling transitions on the accept node, point them to the starting node as fallthrough (so that anything that _isn't_ getting matched by 
         # the last node gets forwarded to the start, looping). If there are no transitions on the final node, point everything to the start.
@@ -6477,7 +6481,91 @@ def debug_dump_datatree(v: object, indent=0, disallow=None, target=sys.stdout): 
             lprint(f" {tag}: {aux}")
 
     for i in ProgramData._children[v]:
+        if id(ProgramData.lookup(i, DTAG.PARENT)) != v:
+            continue
         debug_dump_datatree(i, indent+2, disallow, target=target)
+
+def debug_dump_datatree_graph(v: object, out_name: str = "dtree"):
+    if not debug_enabled:
+        raise RuntimeError("Debugging was disabled! You probably need to install graphviz")
+
+    anon_counter = 0
+
+    def newid():
+        nonlocal anon_counter
+        anon_counter += 1
+        return f"anon-{anon_counter}"
+
+    g = graphviz.Graph(name='dfa', comment=ProgramData.lookup(v, DTAG.NAME))
+    g.attr(rankdir="LR")
+
+    def escape(x: str):
+        return graphviz.escape(x).replace("<", "\\<").replace(">", "\\>").replace("{", "\\{").replace("}", "\\}").replace("\n", "\\n")
+
+    def aux(v: object, disallow: list) -> str:
+        nonlocal g
+
+        if v in disallow or id(v) in disallow:
+            nid = newid()
+            g.node(nid, "<recerr>", color="red")
+            return nid
+
+        disallow = [v, *disallow]
+
+        if type(v) is int and v in ProgramData._refmap and ProgramData._refmap[v]() is not None:
+            v = ProgramData._refmap[v]()
+
+        nid = str(id(v) if type(v) is not int else v)
+
+        name = ProgramData.lookup(v, DTAG.NAME, recurse_upwards=False)
+        if name is None:
+            if type(v) is int and ProgramData.do(ProgramFlag.DEBUG_DTREE_HIDE_GC):
+                g.node(nid, "<gcd>", color="grey")
+                return nid
+            elif type(v) is int:
+                name = "<unk>"
+            else:
+                name = repr(v)
+
+        auxdat = []
+        for tag in DTAG:
+            if tag in (DTAG.PARENT, DTAG.NAME): continue
+            val = ProgramData.lookup(v, tag, recurse_upwards=False, recurse_downwards=False)
+            if val is not None:
+                auxdat.append(f"{tag}: {val}")
+
+        auxdat = '\n'.join(auxdat)
+        if auxdat:
+            contents = graphviz.nohtml(f"<head>{escape(name)}|{escape(auxdat)}")
+        else:
+            contents = graphviz.nohtml(f"<head>{escape(name)}")
+        g.node(nid, contents, shape="record")
+        
+        if type(v) is not int:
+            v = id(v)
+
+        for i in ProgramData._children[v]:
+            if id(ProgramData.lookup(i, DTAG.PARENT)) != v:
+                continue
+            childid = aux(i, disallow)
+            g.edge(nid, childid)
+
+        return nid + ":head"
+
+    if v is None:
+        for key in ProgramData._children.copy():
+            if ProgramData.lookup(key, DTAG.PARENT, recurse_upwards=False) is None:
+                if ProgramData.do(ProgramFlag.DEBUG_DTREE_HIDE_GC) and (key not in ProgramData._refmap or ProgramData._refmap[key]() is None):
+                    continue
+                aux(key, [])
+    else:
+        aux(v, [])
+
+    if ProgramData.option(ProgramOption.DEBUG_GRAPH_DUMP_FORMAT) == "dot":
+        g.save(out_name + ".dot")
+    else:
+        g.render(out_name, format=ProgramData.option(ProgramOption.DEBUG_GRAPH_DUMP_FORMAT), cleanup=True)
+
 
 def main(): # pragma: no cover
     try:
@@ -6529,7 +6617,6 @@ def main(): # pragma: no cover
 
         if ProgramData.dump(DebugDumpable.DFA): debug_dump_dfa(dctx.dfa, ProgramData.dump_prefix + ".dfa")
         if ProgramData.dry_run:
-            if ProgramData.dump(DebugDumpable.DTREE): debug_dump_datatree(None)
             print("... dry run, skipping code generation")
             exit(0)
 
@@ -6544,7 +6631,11 @@ def main(): # pragma: no cover
                 print("Codegen error:", str(e), file=sys.stderr)
                 exit(5)
     finally:
-        if ProgramData.dump(DebugDumpable.DTREE): debug_dump_datatree(None)
+        if ProgramData.dump(DebugDumpable.DTREE): 
+            if ProgramData.do(ProgramFlag.DEBUG_DTREE_AS_GRAPH):
+                debug_dump_datatree_graph(None, ProgramData.dump_prefix + ".dtree")
+            else:
+                debug_dump_datatree(None)
 
     with open(program_name + ".h", "w") as f:
         f.write(header)
