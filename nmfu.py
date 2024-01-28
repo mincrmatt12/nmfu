@@ -2180,10 +2180,12 @@ class DirectMatch(Match, HasDefaultDebugInfo):
             next_state = DFState()
             start_action_holder = (self.start_actions if j == 0 else [])
             t = DFTransition([character]).attach(*start_action_holder, *self.char_actions).to(next_state)
+            ProgramData.imbue(state, DTAG.NAME, f"direct match {self.match_contents!r}[{j}]")
             state[DFTransition.Else] = DFTransition().to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*start_action_holder).fallthrough().handles_else()
             if j == len(self.match_contents) - 1:
                 t.attach(*self.finish_actions)
                 sm.mark_accepting(next_state)
+                ProgramData.imbue(next_state, DTAG.NAME, f"direct match {self.match_contents!r}[{j}]")
             state.transition(t)
             sm.add(next_state)
             state = next_state
@@ -2224,10 +2226,12 @@ class CaseDirectMatch(Match, HasDefaultDebugInfo):
             next_state = DFState()
             start_action_holder = (self.start_actions if j == 0 else [])
             t = DFTransition(self._create_casei_from(character)).attach(*start_action_holder, *self.char_actions).to(next_state)
+            ProgramData.imbue(state, DTAG.NAME, f"casei match {self.match_contents!r}[{j}]")
             state[DFTransition.Else] = DFTransition().to(current_error_handlers[ErrorReasons.NO_MATCH]).attach(*start_action_holder).fallthrough().handles_else()
             if j == len(self.match_contents) - 1:
                 t.attach(*self.finish_actions)
                 sm.mark_accepting(next_state)
+                ProgramData.imbue(next_state, DTAG.NAME, f"casei match {self.match_contents!r}[{j}]")
             state.transition(t)
             sm.add(next_state)
             state = next_state
