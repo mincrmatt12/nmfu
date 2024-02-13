@@ -1227,10 +1227,6 @@ class ProgramData:
             cls._collection[id_obj] = {}
 
         if tag not in ProgramData._collection[id_obj]:
-            if DTAG.PARENT in ProgramData._collection[id_obj] and recurse_upwards:
-                val = cls.lookup(ProgramData._collection[id_obj][DTAG.PARENT], tag)
-                if val is not None:
-                    return val
             if isinstance(obj, HasDefaultDebugInfo):
                 val = obj.debug_lookup(tag)
                 if val is not None:
@@ -1241,6 +1237,10 @@ class ProgramData:
                     val = v_obj.debug_lookup(tag)
                     if val is not None:
                         return val
+            if DTAG.PARENT in ProgramData._collection[id_obj] and recurse_upwards:
+                val = cls.lookup(ProgramData._collection[id_obj][DTAG.PARENT], tag)
+                if val is not None:
+                    return val
             if tag in (DTAG.SOURCE_COLUMN, DTAG.SOURCE_LINE) and recurse_downwards:
                 for i in cls._children[id_obj]:
                     val = cls.lookup(i, tag, recurse_upwards=False)
