@@ -912,6 +912,7 @@ class DFA:
                 culled_transition = transition.copy()
 
                 relevant_values = set(transition.on_values)
+                irrelevant_values = set()
                 if DFTransition.Else in relevant_values:
                     relevant_values.update(local_else_meaning)
                 target = sub_state[relevant_values]
@@ -920,8 +921,10 @@ class DFA:
                     for value in relevant_values:
                         v = sub_state[value]
                         if v is None:
+                            irrelevant_values.add(value)
                             continue
                         targets.add(v)
+                    relevant_values -= irrelevant_values
                 else:
                     targets = {target} 
 
@@ -941,10 +944,10 @@ class DFA:
                     targets = [x for x in targets if not x.error_handling and x.target != transition.target]
                     dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("TAF", targets)
                     dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("RV", relevant_values)
-                    
-                    for target in targets:
-                        relevant_values.intersection_update(target.on_values)
-
+                    for i in relevant_values:
+                        if sub_state[i] not in targets:
+                            irrelevant_values.add(i)
+                    relevant_values -= irrelevant_values
                     dprint[ProgramFlag.VERBOSE_AMBIG_ERRORS]("RVF", relevant_values)
                     
                     # Come up with a reasonable description of which characters are ambiguous
@@ -963,7 +966,7 @@ class DFA:
                         *(resolve_transitions_for_error(x, relevant_values) for x in targets)), *resolve_transitions_for_error(transition, relevant_values))
 
                 # Create transition to add
-                culled_transition.on_values = list(relevant_values)
+                culled_transition.on_values = list(relevant_values | irrelevant_values)
                 culled_transition.attach(*chain_actions, prepend=True)
                 culled_chained_transitions.append(culled_transition)
 
