@@ -228,13 +228,14 @@ CATCH_OPTION: /nomatch|outofspace/
 
 RESULT_CODE: /yieldcode|finishcode/
 
-%import common.CNAME -> IDENTIFIER
+%import common.CNAME -> CNAME
 %import common.SIGNED_INT -> NUMBER
 %import common.HEXDIGIT
 
 HEX_NUMBER: ["+"|"-"] "0x" HEXDIGIT+
 BIN_NUMBER: "0b" ["0"|"1"]+
 RADIX_NUMBER: HEX_NUMBER | BIN_NUMBER | NUMBER
+IDENTIFIER.-1: CNAME
 
 STRING: /"(?:[^"\\]|\\.)*"/
 
