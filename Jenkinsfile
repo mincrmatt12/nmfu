@@ -18,7 +18,8 @@ pipeline {
 			}
 			steps {
 				sh "rm dist/* || true"
-				sh "python setup.py egg_info --tag-build '${TAG_BUILD}' sdist bdist_wheel"
+				sh "mkdir -p .venv; python -m venv .venv; .venv/bin/pip install setuptools wheel;"
+				sh ".venv/bin/python setup.py egg_info --tag-build '${TAG_BUILD}' sdist bdist_wheel"
 				archiveArtifacts artifacts: 'dist/*'
 				stash includes: 'dist/*', name: 'built'
 			}
