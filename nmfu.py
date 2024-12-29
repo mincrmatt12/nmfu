@@ -1022,7 +1022,9 @@ class DTAG(enum.Enum):
     NAME = 0
     SOURCE_LINE = 1
     SOURCE_COLUMN = 2
+
     PARENT = 3
+    MACRO_INSTANCE = 4
 
     # Specific to actions
     STRICT_TIMING_REASON = 20
@@ -1567,6 +1569,15 @@ class NMFUError(Exception):
                         info_str += "\n" + NMFUError._generate_whitespace_marker(line, column)
                 else:
                     continue
+            macro_inst = ProgramData.lookup(reason, DTAG.MACRO_INSTANCE)
+            while macro_inst is not None:
+                info_str += f"\n  - expanded from {macro_inst.macro.name}"
+                line, column = (ProgramData.lookup(macro_inst, tag) for tag in (DTAG.SOURCE_LINE, DTAG.SOURCE_COLUMN))
+                if line is not None:
+                    info_str += f" at line {line}:\n{ProgramData.get_source_line(line)}"
+                    if column is not None:
+                        info_str += "\n" + NMFUError._generate_whitespace_marker(line, column)
+                macro_inst = macro_inst.parent
             if additional_info(reason):
                 info_str += "\n  {}".format(additional_info(reason))
             info_strs.append(info_str)
@@ -4231,6 +4242,15 @@ class Macro:
             bound_arguments[(argspec.get_lookup_type(), argspec.name)] = value
         return bound_arguments
 
+class MacroInstance: # dummy object used to track nested macros for diagnostics
+                     # todo: could probably rewrite the argument stack in terms of this
+    def __init__(self, macro: Macro, parent: "Optional[MacroInstance]" = None):
+        self.parent = parent
+        self.macro = macro
+
+    def __repr__(self):
+        return f"MacroInstance({self.macro.name}, {self.parent!r})"
+
 # =========
 # PARSE CTX
 # =========
@@ -4250,6 +4270,7 @@ class ParseCtx:
         self.innermost_break_handler = None  # just an Action
         
         self.bound_argument_stack: List[Dict[Tuple[MacroArgumentKind, str], lark.Tree]] = []
+        self.active_macro: Optional[MacroInstance] = None
 
         self.yield_codes = []
         self.finish_codes = []
@@ -4745,8 +4766,14 @@ class ParseCtx:
         self.bound_argument_stack.append(
             macro.bind_arguments_for(arguments, self)
         )
+        self.active_macro = ProgramData.imbue(
+                MacroInstance(macro, self.active_macro),
+                DTAG.SOURCE_LINE, lark_node_for_error.meta.line,
+                DTAG.SOURCE_COLUMN, lark_node_for_error.meta.column
+        )
         node = ProgramData.imbue(self._parse_stmt_seq(macro.parse_tree), DTAG.PARENT, macro)
         del self.bound_argument_stack[-1]
+        self.active_macro = self.active_macro.parent
         return node
 
     def _parse_stmt(self, stmt: lark.Tree) -> Node:
@@ -4917,12 +4944,16 @@ class ParseCtx:
 
     def _parse_stmt_seq(self, stmts: List[lark.Tree]) -> Node:
         """
-        Parse a set of statements into one big node
+        Parse a set of statements into one big node.
+
+        Also, this is where we associate nodes with their containing macro.
         """
 
         next_node = None
         for stmt in reversed(stmts):
             node = self._parse_stmt(stmt)
+            if self.active_macro and ProgramData.lookup(node, DTAG.MACRO_INSTANCE, recurse_upwards=False, recurse_downwards=False) is None:
+                node = ProgramData.imbue(node, DTAG.MACRO_INSTANCE, self.active_macro)
             if node.get_next() is not None:
                 # We need to find the actual end
                 end_node = node
