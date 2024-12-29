@@ -1888,6 +1888,11 @@ class BreakAction(Action, HasDefaultDebugInfo):
     def replacement_actions(self):
         return self.refers_to.after_break_actions
 
+    def __eq__(self, o):
+        if not isinstance(o, BreakAction):
+            return NotImplemented
+        return o.refers_to == self.refers_to
+
 class AppendTo(Action, HasDefaultDebugInfo):
     def __init__(self, end_target, into_storage: "OutputStorage"):
         self.end_target = end_target
@@ -3907,7 +3912,7 @@ class LoopNode(ActionSinkNode, ActionSourceNode):
         return self.loop_start_actions, self
 
     def get_break_handler(self):
-        return self.break_action
+        return BreakAction(self)
 
     def set_child(self, child: Node):
         if isinstance(child, ActionSourceNode):
@@ -4266,8 +4271,8 @@ class ParseCtx:
         self.generic_fail_state = DFState()
 
         self.exception_handlers = defaultdict(lambda: self.generic_fail_state)  # normal ErrorReason -> State
-        self.break_handlers = {}      # "string name" -> Action
-        self.innermost_break_handler = None  # just an Action
+        self.break_handlers = {}      # "string name" -> lambda: Action
+        self.innermost_break_handler = None  # just a lambda: Action
         
         self.bound_argument_stack: List[Dict[Tuple[MacroArgumentKind, str], lark.Tree]] = []
         self.active_macro: Optional[MacroInstance] = None
@@ -4814,6 +4819,8 @@ class ParseCtx:
                 act = self.innermost_break_handler
             if act is None:
                 raise IllegalParseTree("Break outside of loop", stmt)
+            else:
+                act = act()
             ProgramData.imbue(act, DTAG.SOURCE_LINE, stmt.meta.line)
             ProgramData.imbue(act, DTAG.SOURCE_COLUMN, stmt.meta.column)
             return ActionNode(act)
@@ -4885,8 +4892,8 @@ class ParseCtx:
                 statements = stmt.children[1:]
             loop_node = LoopNode(loop_name)
             previous_break = self.innermost_break_handler
-            self.break_handlers[loop_name] = loop_node.get_break_handler()
-            self.innermost_break_handler = loop_node.get_break_handler()
+            self.break_handlers[loop_name] = loop_node.get_break_handler
+            self.innermost_break_handler = loop_node.get_break_handler
             child_node = self._parse_stmt_seq(statements)
             self.innermost_break_handler = previous_break
             loop_node.set_child(child_node)
