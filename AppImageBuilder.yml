@@ -29,6 +29,11 @@ AppDir:
     after_runtime: |
         sed -i 's/Terminal=false/Terminal=true/' "$TARGET_APPDIR/xyz.mm12.nmfu.desktop"
 
+    runtime:
+      env:
+        PYTHONHOME: '${APPDIR}/usr'
+        PYTHONPATH: '${APPDIR}/usr/lib/python3.8/site-packages'
+
 AppImage:
     arch: x86_64
     sign-key: None
