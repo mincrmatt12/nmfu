@@ -14,12 +14,12 @@ pipeline {
 				}
 			}
 			environment {
-				TAG_BUILD = """${sh(returnStdout: true, script: 'bash -c "[[ \\$TAG_NAME ]] && echo -n \'\' || echo -n --tag-build \\\'dev0+git-${GIT_COMMIT}\\\'"')}"""
+				TAG_BUILD = """${sh(returnStdout: true, script: 'bash -c "[[ \\$TAG_NAME ]] && echo -n \'\' || echo -n -C--global-option=egg_info -C--global-option=--tag-build=\\\'dev0+git-${GIT_COMMIT}\\\'"')}"""
 			}
 			steps {
 				sh "rm dist/* || true"
-				sh "mkdir -p .venv; python -m venv .venv; .venv/bin/pip install setuptools wheel;"
-				sh ".venv/bin/python setup.py egg_info ${env.TAG_BUILD} sdist bdist_wheel"
+				sh "mkdir -p .venv; python -m venv .venv; .venv/bin/pip install setuptools wheel build;"
+				sh ".venv/bin/python -m build ${env.TAG_BUILD}"
 				archiveArtifacts artifacts: 'dist/*'
 				stash includes: 'dist/*', name: 'built'
 			}
