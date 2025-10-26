@@ -22,7 +22,8 @@ setup(
         author="Matthew Mirvish",
         author_email="matthew@mm12.xyz",
 
-        license="GPLv3",
+        license="GPL-3.0-or-later",
+
         long_description=readme,
         long_description_content_type="text/markdown",
 
@@ -43,7 +44,6 @@ setup(
         classifiers=[
             "Development Status :: 3 - Alpha",
             "Environment :: Console",
-            "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
             "Intended Audience :: Developers",
             "Programming Language :: C",
             "Programming Language :: Python :: 3",

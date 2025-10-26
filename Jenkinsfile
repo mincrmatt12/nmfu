@@ -18,7 +18,7 @@ pipeline {
 			}
 			steps {
 				sh "rm dist/* || true"
-				sh "mkdir -p .venv; python -m venv .venv; .venv/bin/pip install setuptools wheel build;"
+				sh "mkdir -p .venv; python -m venv .venv; .venv/bin/pip install build;"
 				sh ".venv/bin/python -m build ${env.TAG_BUILD}"
 				archiveArtifacts artifacts: 'dist/*'
 				stash includes: 'dist/*', name: 'built'
